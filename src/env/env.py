@@ -36,6 +36,7 @@ class RSMEnvConfig:
 @dataclass
 class IntervalResult:
     IntervalLatencyMap: Dict[int, Dict[int, int]]
+    ClientRequests: Dict[int, int]
 
 class SimulationBase(ABC):
     """
@@ -92,7 +93,6 @@ class RSMEnv(Env):
         self.action_space = spaces.Discrete(config.n_actions)
         self.state = None
 
-
     def step(self, action: ActType) -> Tuple[ObsType, float, bool, bool, dict]:
 
         self.simulation.setPlacement(action)
@@ -112,7 +112,6 @@ class RSMEnv(Env):
         """
 
         return np.sum((self.graph.edges.data("weight")))
-
 
 
 class TorchGraphObservationWrapper(gym.ObservationWrapper):
