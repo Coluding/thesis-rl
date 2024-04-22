@@ -1,5 +1,5 @@
 from typing import Union, List, Tuple, Dict
-
+import matplotlib.pyplot as plt
 import gym
 import networkx as nx
 import numpy as np
@@ -14,7 +14,10 @@ from torch_geometric.utils.convert import from_networkx
 from abc import ABC, abstractmethod
 import torch_geometric
 
-from src.env.conversion_utils import convert_interval_result_to_graph
+
+
+
+
 
 @dataclass
 class RSMEnvConfig:
@@ -23,28 +26,22 @@ class RSMEnvConfig:
     """
     device: str
     dtype: torch.dtype
-    batch_size: int
     n_actions: int
-    reward_threshold: int
     num_nodes: int
     feature_dim_node: int
-    run_type_checks: bool = False
-    allow_done_after_reset: bool = False
     feature_dim_edge: int = 1
 
 
 @dataclass
 class IntervalResult:
     IntervalLatencyMap: Dict[int, Dict[int, int]]
-    ClientRequests: Dict[int, int]
+
 
 class SimulationBase(ABC):
     """
     Base class for simulation. This will be used as the interface for the simulation environment that interacts with
     the Java simulation environment using jpype
     """
-    def __init__(self):
-        pass
 
     @abstractmethod
     def runInterval(self) -> IntervalResult:
@@ -62,7 +59,7 @@ class SimulationBase(ABC):
 
 
     @abstractmethod
-    def reset(self) -> Union[Dict[int, Dict[int, int]], List[int]]:
+    def reset(self) -> Dict[int, Dict[int, int]]:
         """
         Reset the simulation environment and return the initial state and a list of all possible locations of the nodes
         """
@@ -71,7 +68,7 @@ class SimulationBase(ABC):
 
 class RSMEnv(Env):
     """
-    A network container for OpenAI GYM
+    A network container for OpenAI GYM for the environment of a Replicated State Machine system
     """
 
     def __init__(self,
@@ -87,8 +84,8 @@ class RSMEnv(Env):
         self.observation_space = spaces.Graph(node_space=self.node_space, edge_space=self.edge_space)
 
         self.graph = nx.Graph()
-        initial_latencies, all_locations = self.simulation.reset()
-        self.graph.add_nodes_from(all_locations)
+        initial_latencies = self.simulation.reset()
+        self.graph = adjust_networkx_graph(self.graph, initial_latencies)
 
         self.action_space = spaces.Discrete(config.n_actions)
         self.state = None
@@ -97,22 +94,46 @@ class RSMEnv(Env):
 
         self.simulation.setPlacement(action)
         interval_result = self.simulation.runInterval()
-        self.graph = convert_interval_result_to_graph(interval_result)
+        self.graph = adjust_networkx_graph(self.graph, interval_result)
 
         # Calculate reward (dummy implementation)
         reward = self.compute_reward()
         done = False
+        truncated = False
         info = {}
 
-        return self.graph, reward, done, info
+        return self.graph, reward, done, truncated, info
 
     def compute_reward(self) -> float:
         """
         Compute the reward based on the current state
         """
 
-        return np.sum((self.graph.edges.data("weight")))
+        return np.random.random()
 
+    def render(self, mode='human'):
+        """
+        Render the graph using matplotlib.
+        """
+        if mode == 'human':
+            plt.figure(figsize=(8, 6))
+            pos = nx.spring_layout(self.graph)  # positions for all nodes
+
+            # nodes
+            nx.draw_networkx_nodes(self.graph, pos, node_size=700)
+
+            # edges
+            nx.draw_networkx_edges(self.graph, pos, width=6)
+
+            # node labels
+            nx.draw_networkx_labels(self.graph, pos, font_size=20, font_family='sans-serif')
+
+            # edge weight labels
+            edge_labels = nx.get_edge_attributes(self.graph, 'weight')
+            nx.draw_networkx_edge_labels(self.graph, pos, edge_labels=edge_labels)
+
+            plt.axis('off')  # Turn off the axis
+            plt.show()  # Display the plot
 
 class TorchGraphObservationWrapper(gym.ObservationWrapper):
     def __init__(self, env: RSMEnv):
@@ -121,6 +142,19 @@ class TorchGraphObservationWrapper(gym.ObservationWrapper):
     def observation(self, observation) -> torch_geometric.data.Data:
         return from_networkx(observation)
 
+
+def adjust_networkx_graph(G: nx.Graph, latency_map: IntervalResult):
+    """
+    Adjust the networkx graph with the latency map
+    :param G:
+    :param latency_map:
+    :return:
+    """
+    for src_id, edges in latency_map.IntervalLatencyMap.items():
+        for dest_id, latency in edges.items():
+            G.add_edge(src_id, dest_id, weight=latency)
+
+    return G
 
 if __name__ == "__main__":
     config = RSMEnvConfig(device="cuda", dtype=torch.float32, batch_size=32, n_actions=4, reward_threshold=100, feature_dim_node=128)
