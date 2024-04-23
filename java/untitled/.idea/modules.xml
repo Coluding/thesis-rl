@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/java_mock.iml" filepath="$PROJECT_DIR$/.idea/java_mock.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../simulation/simulation.iml" filepath="$PROJECT_DIR$/../simulation/simulation.iml" />
     </modules>
   </component>
 </project>

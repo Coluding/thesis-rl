@@ -8,7 +8,7 @@ from src.env.env import IntervalResult, RSMEnvConfig, RSMEnv, TorchGraphObservat
 
 def main():
 
-    with jvm_context(classpath=['/home/lubi/Documents/Projects/thesis-java-test/untitled/out/production/untitled']):
+    with jvm_context(classpath=['../../java/untitled/out/production/simulation']):
         dummy = SimulationWrapper("MockSimulation", 7)
         nested_map = dummy.runInterval()
         config = RSMEnvConfig(device="cuda", dtype=torch.float32, num_nodes=10, n_actions=4, feature_dim_node=1)
