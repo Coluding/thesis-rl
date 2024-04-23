@@ -9,11 +9,11 @@ from src.env.env import IntervalResult, RSMEnvConfig, RSMEnv, TorchGraphObservat
 def main():
 
     with jvm_context(classpath=['../../java/untitled/out/production/simulation']):
-        dummy = SimulationWrapper("MockSimulation", 7)
-        nested_map = dummy.runInterval()
+        dummy = SimulationWrapper("MockSimulation", 10, 4, 1)
         config = RSMEnvConfig(device="cuda", dtype=torch.float32, num_nodes=10, n_actions=4, feature_dim_node=1)
         env = RSMEnv(config, dummy)
         env = TorchGraphObservationWrapper(env)
+        env.render("human")
         ret = env.step(1)
         env.render("human")
         env.step(2)

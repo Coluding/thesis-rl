@@ -1,7 +1,7 @@
 import jpype
 import jpype.imports
 from jpype.types import *
-from typing import List
+from typing import List, Callable
 from src.env.env import SimulationBase, IntervalResult
 from contextlib import contextmanager
 
@@ -62,20 +62,29 @@ class SimulationWrapper(SimulationBase):
         self.instance = JavaClassManager.create_instance(self.class_name, *self.args)
 
     def reset(self) -> IntervalResult:
-        java_map = self.instance.reset()
+        interval_result = self.instance.reset()
+        convert_fn = lambda x: list(x)
 
-        return IntervalResult(self._convert_java_map(java_map))
+        return IntervalResult(self._convert_java_double_map(interval_result.getCurrentSystemLatencies()),
+                              self._convert_java_single_map(interval_result.getCurrentSystemConfiguration(),
+                                                            convert_fn))
 
     def runInterval(self) -> IntervalResult:
-        java_map = self.instance.runInterval()
+        interval_result = self.instance.runInterval()
 
-        return IntervalResult(self._convert_java_map(java_map))
+        convert_fn = lambda x: list(x)
 
-    def _convert_java_map(self, java_map):
+        return IntervalResult(self._convert_java_double_map(interval_result.getCurrentSystemLatencies()),
+                              self._convert_java_single_map(interval_result.getCurrentSystemConfiguration(),
+                                                            convert_fn))
+
+    def _convert_java_double_map(self, java_map: jpype.JObject):
         return {outer_key: {inner_key: inner_value for inner_key, inner_value in outer_value.entrySet()}
                 for outer_key, outer_value in java_map.entrySet()}
 
+    def _convert_java_single_map(self, java_map: jpype.JObject,
+                                 conversion_fn: Callable = lambda x: x):
+        return {key: conversion_fn(value) for key, value in java_map.entrySet()}
+
     def setPlacement(self, action: int) -> None:
         self.instance.setPlacement(action)
-
-
