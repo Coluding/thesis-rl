@@ -63,7 +63,7 @@ class SimulationWrapper(SimulationBase):
 
     def reset(self) -> IntervalResult:
         interval_result = self.instance.reset()
-        convert_fn = lambda x: list(x)
+        convert_fn = list 
 
         return IntervalResult(self._convert_java_double_map(interval_result.getCurrentSystemLatencies()),
                               self._convert_java_single_map(interval_result.getCurrentSystemConfiguration(),

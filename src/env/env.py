@@ -124,7 +124,7 @@ class RSMEnv(Env):
             pos = nx.spring_layout(self.graph)
 
             # Fetch the state for each node and determine its outline color
-            node_outline_colors = [color_mapping[self.graph.nodes[node].get('state', 2)] for node in
+            node_outline_colors = [color_mapping[self.graph.nodes[node].get('x', 2)] for node in
                                    self.graph.nodes()]
 
             # Inner color of nodes (can be uniform or different)
@@ -152,12 +152,21 @@ class RSMEnv(Env):
 
 
 class TorchGraphObservationWrapper(gym.ObservationWrapper):
-    def __init__(self, env: RSMEnv):
+    def __init__(self, env: RSMEnv, one_hot: bool = False):
         super().__init__(env)
+        self.one_hot = one_hot
+        self.device = env.config.device
 
     def observation(self, observation: nx.Graph) -> torch_geometric.data.Data:
-        return from_networkx(observation)
+        torch_graph = from_networkx(observation)
 
+        if self.one_hot:
+            torch_graph.x = torch.nn.functional.one_hot(torch_graph.x)
+
+        torch_graph.x = torch_graph.x.to(torch.float32).to(self.device)
+        torch_graph.edge_index = torch_graph.edge_index.to(self.device)
+
+        return torch_graph
 
 def create_networkx_graph(interval_result: IntervalResult) -> nx.Graph:
     """
@@ -205,6 +214,6 @@ def adjust_networkx_graph(G: nx.Graph, interval_result) -> nx.Graph:
             node_states[node] = state_map[state]
 
     # Apply the state attributes to nodes in the graph
-    nx.set_node_attributes(G, node_states, 'state')
+    nx.set_node_attributes(G, node_states, 'x')
 
     return G
