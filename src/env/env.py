@@ -8,8 +8,6 @@ import torch
 from gym import Env
 from gym import spaces
 from gym.core import ActType, ObsType
-from tensordict import TensorDictBase
-from torchrl.envs import EnvBase, GymLikeEnv, GymEnv
 from torch_geometric.utils.convert import from_networkx
 from abc import ABC, abstractmethod
 import torch_geometric
@@ -156,8 +154,3 @@ def adjust_networkx_graph(G: nx.Graph, latency_map: IntervalResult):
 
     return G
 
-if __name__ == "__main__":
-    config = RSMEnvConfig(device="cuda", dtype=torch.float32, batch_size=32, n_actions=4, reward_threshold=100, feature_dim_node=128)
-    env = RSMEnv(config)
-    envg = GymEnv("Pendulum-v1")
-    reset = env.reset()
