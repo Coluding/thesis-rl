@@ -54,7 +54,7 @@ public class MockSimulation {
 
             if (random.nextBoolean()) { // Randomly decide to skip some nodes
                 for (int j = 0; j < numNodes; j++) {
-                    if (i != j && random.nextBoolean()) { // Ensure no self-loop and not every connection is made
+                    if (i != j && random.nextDouble() < 0.20) { // Ensure no self-loop and not every connection is made
                         innerMap.put(j, random.nextInt(100)); // Random values up to 100
                     }
                 }
@@ -67,8 +67,48 @@ public class MockSimulation {
         return new IntervalResult(outerMap, currentSystemConfiguration);
     }
 
-    public void setPlacement(int action){
+    public void setPlacement(int action) {
+        // Retrieve current configurations and create independent lists
+        List<Integer> activeNodes = new ArrayList<>(currentSystemConfiguration.get("active"));
+        List<Integer> passiveNodes = new ArrayList<>(currentSystemConfiguration.get("passive"));
+        List<Integer> offNodes = new ArrayList<>(currentSystemConfiguration.get("off"));
 
+        // Validate node index
+        if (action < 0 || action >= numNodes) {
+            throw new IllegalArgumentException("Invalid node index.");
+        }
+
+        // Find the currently passive node
+        if (passiveNodes.isEmpty()) {
+            throw new IllegalStateException("No passive node is currently set.");
+        }
+        int currentPassive = passiveNodes.get(0);  // Assuming there is exactly one passive node
+
+        // Check if the action node is already passive
+        if (currentPassive == action) {
+            System.out.println("Node " + action + " is already passive.");
+            return;
+        }
+
+        // Identify and switch states
+        passiveNodes.clear();  // Clear the passive list first
+        passiveNodes.add(action);  // Make the action node passive
+
+        // Switch the previously passive node to the new state of the action node
+        if (activeNodes.contains(action)) {
+            activeNodes.remove(Integer.valueOf(action));
+            activeNodes.add(currentPassive);  // Swap passive to active
+        } else if (offNodes.contains(action)) {
+            offNodes.remove(Integer.valueOf(action));
+            offNodes.add(currentPassive);  // Swap passive to off
+        } else {
+            throw new IllegalStateException("Node " + action + " is in an unknown state.");
+        }
+
+        // Update the current configuration
+        currentSystemConfiguration.put("active", activeNodes);
+        currentSystemConfiguration.put("passive", passiveNodes);
+        currentSystemConfiguration.put("off", offNodes);
     }
 
     public IntervalResult reset() {
@@ -89,6 +129,8 @@ public class MockSimulation {
         System.out.println(System.getProperty("java.class.path"));
         MockSimulation obj = new MockSimulation(10,4, 1);
 
-        System.out.println(obj.reset().toString());
+        System.out.println(obj.runInterval().toString());
+        obj.setPlacement(3);
+        System.out.println(obj.getCurrentSystemConfiguration().toString());
     }
 }

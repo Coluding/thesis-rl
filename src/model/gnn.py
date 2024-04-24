@@ -14,11 +14,11 @@ class CriticGNNOutput:
     value: torch.Tensor
 
 
-class CriticGNN(nn.Module):
+class CriticGCNN(nn.Module):
     def __init__(self, feature_dim_node: int = 3, out_channels: int = 24, hidden_channels: int = 12,
                  fc_hidden_dim: int = 128,
                  num_layers: int = 4, num_nodes: int = None):
-        super(CriticGNN, self).__init__()
+        super(CriticGCNN, self).__init__()
         self.num_nodes = num_nodes
         self.conv1 = GCNConv(feature_dim_node, hidden_channels)
         self.hidden_convs = nn.ModuleList()
@@ -80,3 +80,55 @@ class CriticGNN(nn.Module):
         batch_tensor = torch.cat([torch.full((nodes_per_graph,), i) for i in range(num_graphs)])
 
         return batch_tensor
+
+
+class ActorGCNN(nn.Module):
+    def __init__(self,
+                 n_actions: int,
+                 feature_dim_node: int = 3,
+                 out_channels: int = 24,
+                 hidden_channels: int = 12,
+                 fc_hidden_dim: int = 128,
+                 num_layers: int = 4,
+                 num_nodes: int = None):
+        super(ActorGCNN, self).__init__()
+        self.num_nodes = num_nodes
+        self.conv1 = GCNConv(feature_dim_node, hidden_channels)
+        self.hidden_convs = nn.ModuleList()
+        for _ in range(num_layers - 2):
+            self.hidden_convs.append(GCNConv(hidden_channels, hidden_channels))
+
+        self.conv2 = GCNConv(hidden_channels, out_channels)
+
+        self.actor = nn.Sequential(
+            nn.Linear(out_channels, fc_hidden_dim),
+            nn.ReLU(),
+            nn.Linear(fc_hidden_dim, n_actions)
+        )
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.to(self.device)
+
+    def forward(self, data: torch_geometric.data.Data,
+                batch: torch.Tensor = None,) -> CriticGNNOutput:
+
+        x, edge_index = data.x, data.edge_index
+
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        for conv in self.hidden_convs:
+            x = conv(x, edge_index)
+            x = F.relu(x)
+        x = self.conv2(x, edge_index)
+
+        if batch is None and self.num_nodes is not None:
+            batch = self.create_batch_tensor(self.num_nodes, x.shape[0]).to(self.device)
+
+        elif batch is None and self.num_nodes is None:
+            raise ValueError("Either batch or num_nodes must be provided.")
+
+        pooled_x = global_mean_pool(x, batch)
+
+        pa = self.actor(pooled_x)
+
+        return CriticGNNOutput(x, pooled_x, pa)

@@ -12,6 +12,9 @@ from gym.core import ActType, ObsType
 from torch_geometric.utils.convert import from_networkx
 from abc import ABC, abstractmethod
 import torch_geometric
+from threading import Lock, Thread
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+
 
 
 @dataclass
@@ -25,6 +28,9 @@ class RSMEnvConfig:
     num_nodes: int
     feature_dim_node: int
     feature_dim_edge: int = 1
+    use_prev_latencies: bool = True
+    render_mode: str = "rgb_array"
+    fps: int = 2
 
 
 class NodeState(Enum):
@@ -70,7 +76,9 @@ class SimulationBase(ABC):
         pass
 
 
+#TODO: What happens when the number of nodes varies between intervals -> especially rendering method?
 class RSMEnv(Env):
+    render_mode = ['human', "human_constant_node", "rgb_array"]
     """
     A network container for OpenAI GYM for the environment of a Replicated State Machine system
     """
@@ -80,23 +88,30 @@ class RSMEnv(Env):
                  simulation: SimulationBase):
         self.config = config
         self.simulation = simulation
+        self.metadata = {"render_fps": config.fps, "render.modes": self.render_mode}
+        self.render_mode = config.render_mode
 
         self.node_space = spaces.Box(low=0, high=np.inf, shape=(config.feature_dim_node,))
         self.edge_space = spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
 
         self.observation_space = spaces.Graph(node_space=self.node_space, edge_space=self.edge_space)
 
+        self.graph_adjust_function = create_networkx_graph if not config.use_prev_latencies else adjust_networkx_graph
+
         self.graph = nx.Graph()
         initial_latencies: IntervalResult = self.simulation.reset()
-        self.graph = adjust_networkx_graph(self.graph, initial_latencies)
+        self.graph = self.graph_adjust_function(self.graph, initial_latencies)
+        self.pos = nx.spring_layout(self.graph)
 
         self.action_space = spaces.Discrete(config.n_actions)
         self.state = None
 
+
+
     def step(self, action: ActType) -> Tuple[ObsType, float, bool, bool, dict]:
         self.simulation.setPlacement(action)
         interval_result = self.simulation.runInterval()
-        self.graph = adjust_networkx_graph(self.graph, interval_result)
+        self.graph = self.graph_adjust_function(self.graph, interval_result)
 
         # Calculate reward (dummy implementation)
         reward = self.compute_reward()
@@ -113,42 +128,53 @@ class RSMEnv(Env):
 
         return np.random.random()
 
-    def render(self, mode='human',
-               color_mapping: Dict[NodeState, str] = {0: 'gray', 1: 'blue', 2: 'orange'}):
+    def render(self, color_mapping: Dict[NodeState, str] = {0: 'gray', 1: 'blue', 2: 'orange'}):
         """
         Render the graph using matplotlib.
         """
 
-        if mode == 'human':
-            plt.figure(figsize=(8, 6))
-            pos = nx.spring_layout(self.graph)
 
-            # Fetch the state for each node and determine its outline color
-            node_outline_colors = [color_mapping[self.graph.nodes[node].get('x', 2)] for node in
-                                   self.graph.nodes()]
+        fig, ax = plt.subplots(figsize=(8, 6))
+        canvas = FigureCanvas(fig)
+        ax.set_axis_off()
 
-            # Inner color of nodes (can be uniform or different)
-            node_inner_color = 'white'  # All nodes have a white inner color
+        self.pos = nx.spring_layout(self.graph, pos=self.pos, fixed=self.graph.nodes())
 
-            # Draw nodes with inner color
-            nx.draw_networkx_nodes(self.graph, pos, node_color=node_inner_color, node_size=700)
+        # Fetch the state for each node and determine its outline color
+        node_outline_colors = [color_mapping[self.graph.nodes[node].get('x', 2)] for node in self.graph.nodes()]
 
-            # Draw only the borders with a specific outline color
-            nx.draw_networkx_nodes(self.graph, pos, node_color=node_outline_colors, node_size=700,
-                                   edgecolors=node_outline_colors, linewidths=2)
+        # Inner color of nodes (can be uniform or different)
+        node_inner_color = 'white'  # All nodes have a white inner color
 
-            # edges
-            nx.draw_networkx_edges(self.graph, pos, width=6)
+        # Draw nodes with inner color
+        nx.draw_networkx_nodes(self.graph, self.pos, node_color=node_inner_color, node_size=700, ax=ax)
 
-            # node labels
-            nx.draw_networkx_labels(self.graph, pos, font_size=20, font_family='sans-serif')
+        # Draw only the borders with a specific outline color
+        nx.draw_networkx_nodes(self.graph, self.pos, node_color=node_outline_colors, node_size=700,
+                               edgecolors=node_outline_colors, linewidths=2, ax=ax)
 
-            # edge weight labels
-            edge_labels = nx.get_edge_attributes(self.graph, 'weight')
-            nx.draw_networkx_edge_labels(self.graph, pos, edge_labels=edge_labels)
+        # Draw edges
+        nx.draw_networkx_edges(self.graph, self.pos, width=6, ax=ax)
 
-            plt.axis('off')  # Turn off the axis
-            plt.show()  # Display the plot
+        # Node labels
+        nx.draw_networkx_labels(self.graph, self.pos, font_size=20, font_family='sans-serif', ax=ax)
+
+        # Edge weight labels
+        edge_labels = nx.get_edge_attributes(self.graph, 'weight')
+        nx.draw_networkx_edge_labels(self.graph, self.pos, edge_labels=edge_labels, ax=ax)
+
+        # Convert to RGB array and then close plt to avoid memory issues
+        canvas.draw()  # Draw the canvas, cache the renderer
+        image = np.frombuffer(canvas.tostring_rgb(), dtype='uint8')
+        image = image.reshape(canvas.get_width_height()[::-1] + (3,))
+        plt.close(fig)
+
+        if self.render_mode == 'human':
+            plt.imshow(image)
+            plt.axis("off")
+            plt.show()
+        elif self.render_mode == 'rgb_array':
+            return image
 
 
 class TorchGraphObservationWrapper(gym.ObservationWrapper):
@@ -168,19 +194,21 @@ class TorchGraphObservationWrapper(gym.ObservationWrapper):
 
         return torch_graph
 
-def create_networkx_graph(interval_result: IntervalResult) -> nx.Graph:
+
+def create_networkx_graph(graph: nx.Graph,
+                          interval_result: IntervalResult) -> nx.Graph:
     """
     Create a NetworkX graph from the IntervalResult object
     :param interval_result:
     :return:
     """
-    # Create a new directed graph
-    graph = nx.Graph()
 
+    graph = nx.Graph()
     # Add nodes with attributes based on their features
+    state_map = {k: i for i, k in enumerate(interval_result.IntervalConfiguration.keys())}
     for feature, nodes in interval_result.IntervalConfiguration.items():
         for node in nodes:
-            graph.add_node(node, state=feature)
+            graph.add_node(node, x=state_map[feature])
 
     # Add edges based on the latency map
     for node, connections in interval_result.IntervalLatencyMap.items():
