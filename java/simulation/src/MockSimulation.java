@@ -6,21 +6,18 @@ public class MockSimulation {
     private int numActive;
     private int numPassive;
     private int numOff;
+    private int numClients; // Number of client nodes
     private Map<Integer, Map<Integer, Integer>> currentSystem;
     private Map<String, List<Integer>> currentSystemConfiguration;
 
-
-    public MockSimulation(int numNodes, int numActive, int numPassive){
+    public MockSimulation(int numNodes, int numActive, int numPassive, int numClients){
         this.numNodes = numNodes;
         this.numActive = numActive;
         this.numPassive = numPassive;
-        this.numOff = numNodes - numActive - numPassive;
+        this.numClients = numClients;
+        this.numOff = numNodes - numActive - numPassive - numClients;
         this.currentSystemConfiguration = new HashMap<>();
         initializeNodes();
-    }
-
-    public void setNumNodes(int numNodes) {
-        this.numNodes = numNodes;
     }
 
     private void initializeNodes() {
@@ -33,10 +30,11 @@ public class MockSimulation {
         // Shuffle the list to randomize node distribution
         Collections.shuffle(nodeIds);
 
-        // Distribute nodes into different states
+        // Distribute nodes into different states including clients
         currentSystemConfiguration.put("active", nodeIds.subList(0, numActive));
         currentSystemConfiguration.put("passive", nodeIds.subList(numActive, numActive + numPassive));
-        currentSystemConfiguration.put("off", nodeIds.subList(numActive + numPassive, numNodes));
+        currentSystemConfiguration.put("off", nodeIds.subList(numActive + numPassive, numNodes - numClients));
+        currentSystemConfiguration.put("clients", nodeIds.subList(numNodes - numClients, numNodes));
     }
 
     public Map<String, List<Integer>> getCurrentSystemConfiguration() {
@@ -48,19 +46,32 @@ public class MockSimulation {
         Map<Integer, Map<Integer, Integer>> outerMap = new HashMap<>();
         Random random = new Random();
 
-        // Randomly decide the number of edges each node might have (0 to numNodes-1)
+        // Initialize maps for all nodes
         for (int i = 0; i < numNodes; i++) {
-            Map<Integer, Integer> innerMap = new HashMap<>();
+            outerMap.put(i, new HashMap<>());
+        }
 
-            if (random.nextBoolean()) { // Randomly decide to skip some nodes
+        // Connect each client to every active node with random latency
+        List<Integer> clientNodes = currentSystemConfiguration.get("clients");
+        List<Integer> activeNodes = currentSystemConfiguration.get("active");
+        for (int client : clientNodes) {
+            Map<Integer, Integer> connections = outerMap.get(client);
+            for (int active : activeNodes) {
+                connections.put(active, random.nextInt(100)); // Random latency up to 100
+            }
+        }
+
+        // Other random connections (as before)
+        for (int i = 0; i < numNodes; i++) {
+            Map<Integer, Integer> innerMap = outerMap.get(i);
+
+            if (random.nextBoolean()) {
                 for (int j = 0; j < numNodes; j++) {
-                    if (i != j && random.nextDouble() < 0.20) { // Ensure no self-loop and not every connection is made
-                        innerMap.put(j, random.nextInt(100)); // Random values up to 100
+                    if (i != j && random.nextDouble() < 0.20) {
+                        innerMap.put(j, random.nextInt(100));
                     }
                 }
             }
-
-            outerMap.put(i, innerMap);
         }
 
         this.currentSystem = outerMap;
@@ -72,10 +83,16 @@ public class MockSimulation {
         List<Integer> activeNodes = new ArrayList<>(currentSystemConfiguration.get("active"));
         List<Integer> passiveNodes = new ArrayList<>(currentSystemConfiguration.get("passive"));
         List<Integer> offNodes = new ArrayList<>(currentSystemConfiguration.get("off"));
+        List<Integer> clientNodes = currentSystemConfiguration.get("clients");
 
         // Validate node index
         if (action < 0 || action >= numNodes) {
             throw new IllegalArgumentException("Invalid node index.");
+        }
+
+        // Ensure the action node is not a client node
+        if (clientNodes.contains(action)) {
+            throw new IllegalArgumentException("Client nodes cannot be set as passive.");
         }
 
         // Find the currently passive node
@@ -127,7 +144,7 @@ public class MockSimulation {
 
     public static void main(String[] args) {
         System.out.println(System.getProperty("java.class.path"));
-        MockSimulation obj = new MockSimulation(10,4, 1);
+        MockSimulation obj = new MockSimulation(12,4, 1, 2);
 
         System.out.println(obj.runInterval().toString());
         obj.setPlacement(3);

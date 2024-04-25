@@ -128,7 +128,7 @@ class RSMEnv(Env):
 
         return np.random.random()
 
-    def render(self, color_mapping: Dict[NodeState, str] = {0: 'gray', 1: 'blue', 2: 'orange'}):
+    def render(self, color_mapping: Dict[NodeState, str] = {0: 'orange', 1: 'blue', 2: 'gray', 3: 'green'}):
         """
         Render the graph using matplotlib.
         """
