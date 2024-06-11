@@ -1,17 +1,48 @@
 import time
-
+from dataclasses import dataclass
 import networkx as nx
 import random
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union, Optional
+from enum import Enum
 
+
+class ActionType(Enum):
+    PASSIVE = 1
+    ACTIVE = 2
+    BOTH = 3
+
+@dataclass
+class Penalty:
+    ReconfigurationPenalty: float = 100
+    PassiveCost: float = 10
+    ActiveCost: float = 10
+    WrongActiveAfterPassivePenalty: float = 100
+    WrongActivePenalty: float = 100
+    WrongNumberPassivePenalty: float = 100
+
+@dataclass
+class PenaltyWeights:
+    LatencyPenalty: float = 1
+    ReconfigurationPenalty: float = 1
+    PassiveCost: float = 1
+    ActiveCost: float = 1
+    WrongActivePenalty: float = 1
+    WrongActiveAfterPassivePenalty: float = 1
+    WrongNumberPassivePenalty: float = 1
 
 class NetworkEnvironment:
-    def __init__(self, num_centers, clusters, num_clients, cluster_region_start = "asia",
+    def __init__(self, num_centers, clusters, num_clients, penalty: Optional[Penalty] = Penalty,
+                 penalty_weights: Optional[PenaltyWeights] = PenaltyWeights,
+                 cluster_region_start = "asia",
+                 action_type: ActionType = ActionType.BOTH,
                  total_requests_per_interval=10000, k=3, p=1, client_start_region: str | dict = 'asia'):
         self.graph = nx.Graph()
+        self.action_type = action_type
         self.data_centers = []
+        self.penalty = penalty
+        self.penalty_weights = penalty_weights
         self.clients = [f'client_{i}' for i in range(num_clients)]
         self.client_regions = {f'client_{i}': client_start_region for i in range(num_clients)} if isinstance(
             client_start_region, str) else client_start_region
@@ -19,7 +50,9 @@ class NetworkEnvironment:
         self.internal_latencies = {}
         self.cluster_region_start = cluster_region_start
         self.active_replicas = set()
+        self.active_history = set()
         self.passive_replicas = set()
+        self.passive_history = set()
         self.clusters = clusters
         self.num_centers = num_centers
         self.total_requests_per_interval = total_requests_per_interval
@@ -34,6 +67,8 @@ class NetworkEnvironment:
         # Add data centers and clients to the graph
         self.graph.add_nodes_from(self.data_centers + self.clients)
         self._initialize_edges()
+
+        self.penalty_state = 0
 
     def _initialize_data_centers(self):
         locations = ['europe', 'asia', 'usa']
@@ -69,14 +104,92 @@ class NetworkEnvironment:
                 latency = random.randint(10, 100)
                 self.graph.add_edge(client, dc, latency=latency)
 
-    def reconfigure_active_nodes(self, new_active_list):
-        self.active_replicas = set(new_active_list)
+    def reconfigure_active_nodes(self):
         self.update_client_latencies()
-        self.update_active_dc_latencies(new_active_list)
-
-    def reconfigure_passive_nodes(self, new_passive_list):
-        self.passive_replicas = set(new_passive_list)
         self.update_active_dc_latencies(self.active_replicas)
+
+    def reconfigure_passive_nodes(self):
+        self.update_active_dc_latencies(self.active_replicas)
+
+    def convert_action(self, action: Union[Tuple[str, str], Tuple[Tuple[str, str], Tuple[str, str]]]):
+        """
+        Convert the action to the appropriate format based on the action type
+        """
+        if self.action_type == ActionType.PASSIVE:
+            if action[0] not in self.passive_replicas:
+                raise ValueError("The suggested location to be replaed is currently not in the passive data centers")
+            valid = self.review_passive_action(action)
+            if valid:
+                self.passive_replicas.remove(action[0])
+                self.passive_replicas.add(action[1])
+                self._review_reconfiguration(action)
+            self.reconfigure_passive_nodes()
+        elif self.action_type == ActionType.ACTIVE:
+            if action[0] not in self.active_replicas:
+                raise ValueError("The suggested location to be replaced is currently not in the active data centers")
+            valid = self._review_active_action(action)
+            if valid:
+                self.active_replicas.remove(action[0])
+                self.active_replicas.add(action[1])
+                self._review_reconfiguration(action)
+            self.reconfigure_active_nodes()
+        elif self.action_type == ActionType.BOTH:
+            if len(action) != 2:
+                raise ValueError("Invalid action format. It must be a tuple of two tuples.")
+            valid = self._review_active_action(action[0])
+            if valid:
+                self.active_replicas.remove(action[0][0])
+                self.active_replicas.add(action[0][1])
+                self._review_active_action(action[0])
+            valid = self.review_passive_action(action[1])
+            if valid:
+                self.passive_replicas.remove(action[1][0])
+                self.passive_replicas.add(action[1][1])
+                self._review_reconfiguration(action[1])
+            self.reconfigure_active_nodes()
+            self.reconfigure_passive_nodes()
+        else:
+            raise ValueError("Invalid action type")
+
+        self.active_history = self.active_history.union(self.active_replicas)
+        self.passive_history = self.passive_history.union(self.passive_replicas)
+
+
+    def review_passive_action(self, action: Tuple[str, str]) -> bool:
+        """
+        Review the passive action to check whether the number of passive nodes is not exceeded. If so, the internal
+        penalty state is triggered.
+        """
+        valid = True
+        if action[1] in self.passive_replicas:
+            self.penalty_state += (self.penalty_weights.WrongActivePenalty * self.penalty.WrongActivePenalty)
+            valid = False
+
+        return valid
+
+    def _review_active_action(self, action: Tuple[str, str]) -> bool:
+        """
+        Review the active action to check wether a previous non-passive node was made active. If so, the internal
+        penalty state is triggered.
+        """
+        valid = True
+        if action[1] not in self.passive_history:
+            self.penalty_state += (self.penalty_weights.WrongActiveAfterPassivePenalty *
+                                   self.penalty.WrongActiveAfterPassivePenalty)
+
+        if action[1] in self.active_replicas:
+            self.penalty_state += (self.penalty_weights.WrongActivePenalty * self.penalty.WrongActivePenalty)
+            valid = False
+
+        return valid
+
+    def _review_reconfiguration(self, action: Tuple[str, str]):
+        """
+        Review the reconfiguration to chck whether new nodes werwe selected. If so, the internal penalty state is
+        triggered.
+        """
+        if action[0] != action[1]:
+            self.penalty_state += (self.penalty_weights.ReconfigurationPenalty * self.penalty.ReconfigurationPenalty)
 
     def update_active_dc_latencies(self, active_list):
         for dc1 in active_list:
@@ -161,7 +274,7 @@ class NetworkEnvironment:
             if region in dc:
                 latency = random.randint(10, 100)
             else:
-                latency = random.randint(100, 500)
+                latency = random.randint(150, 750)
             self.graph[client][dc]['latency'] = latency
             self.client_regions[client] = region
 
@@ -182,9 +295,13 @@ class NetworkEnvironment:
             fluctuation = random.uniform(-0.01, 0.01) * self.internal_latencies[key]
             self.internal_latencies[key] += fluctuation
 
-    def step(self):
+    def step(self, action: Optional[Union[Tuple[str, str], Tuple[Tuple[str, str], Tuple[str, str]]] ] = None):
         self.simulate_client_movements()
         request_distribution = self.distribute_requests()
+        #print(f"Client distribution: {request_distribution}")
+
+        if action is not None:
+            self.convert_action(action)
 
         print(f"Client regions: {self.client_regions}")
         print(f"Active replicas: {self.active_replicas}")
@@ -193,16 +310,21 @@ class NetworkEnvironment:
             for active_replica in self.active_replicas:
                 latency = self.get_latency(client, active_replica)
                 total_latency += latency * num_requests
-                print(f"Client: {client}, DC: {active_replica}, Latency: {latency}, Requests: {num_requests}")
+                #print(f"Client: {client}, DC: {active_replica}, Latency: {latency}, Requests: {num_requests}")
         avg_latency = self.aggregate_latency()
         print(f"Average latency: {avg_latency}")
-        reward = -avg_latency
+
+        reward = self.penalty_weights.LatencyPenalty * (-avg_latency) - self.penalty_state
+        print(f"Reward: {reward}")
 
         self.time_of_day = (self.time_of_day + 1) % 24
         self.fluctuate_latencies()
 
         state = self.get_external_state()
-        done = self.time_of_day == 0
+        #done = self.time_of_day == 0
+        done = False
+
+        self.penalty_state = 0
 
         return state, reward, done
 
@@ -275,41 +397,38 @@ class NetworkEnvironment:
 
 
 # Example usage
-num_centers = 10
-clusters = [3, 4, 3]  # Europe, Asia, USA
-num_clients = 5
-
-env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients)
-
-# Example usage
 num_centers = 15
 clusters = [5, 5, 5]  # Europe, Asia, USA
-num_clients = 5
+num_clients = 20
 
 env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients)
+intial_dcs = list(env.active_replicas)
+print(f"Initial active data centers: {intial_dcs}")
+initial_passive_dcs = list(env.passive_replicas)
+print(f"Initial passive data centers: {initial_passive_dcs}")
 
 # Simulate for 24 hours
 for i in range(24):
     print(f"Time of day: {i}")
-    env.step()
-    env.visualize()
-    time.sleep(0.5)
+    #env.visualize()
+    #time.sleep(0.5)
 
     if i == 6:
-        env.reconfigure_active_nodes(['asia_dc_1', 'asia_dc_2', 'europe_dc_1'])
-        env.reconfigure_passive_nodes(['europe_dc_2'])
         print("Reconfiguring active nodes")
+        print("-------------------------------------------------------------------------")
+        env.step(((intial_dcs[0], 'europe_dc_2'), (initial_passive_dcs[0], 'europe_dc_1')))
         print("-------------------------------------------------------------------------")
 
     if i == 12:
-        env.reconfigure_active_nodes(['europe_dc_1', 'europe_dc_2', 'europe_dc_3'])
-        env.reconfigure_passive_nodes(['europe_dc_4'])
         print("Reconfiguring active nodes")
+        print("-------------------------------------------------------------------------")
+        env.step(((intial_dcs[1], 'europe_dc_1'), (list(env.passive_replicas)[0], 'europe_dc_2')))
         print("-------------------------------------------------------------------------")
 
     elif i == 20:
-        env.reconfigure_active_nodes(['usa_dc_1', 'usa_dc_2', 'usa_dc_3'])
-        env.reconfigure_passive_nodes(['usa_dc_4'])
         print("Reconfiguring active nodes")
         print("-------------------------------------------------------------------------")
-
+        env.step(((intial_dcs[2], 'usa_dc_1'), ('europe_dc_2', 'usa_dc_3')))
+        print("-------------------------------------------------------------------------")
+    else:
+        env.step()

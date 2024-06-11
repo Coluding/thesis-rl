@@ -222,7 +222,8 @@ class SwapGNN(nn.Module):
         pi1 = torch.distributions.Categorical(logits=removed_facility_logits.squeeze())
         action1 = pi1.sample()
 
-        new_facility_logits = h_l1 @ nn.Tanh()(self.hidden_state_projector(h_l1[action1]).unsqueeze(0)).transpose(-2, -1)
+        new_facility_logits = h_l1 @ nn.Tanh()(
+            self.hidden_state_projector(h_l1[action1]).unsqueeze(0)).transpose(-2, -1)
         pi2 = torch.distributions.Categorical(logits=new_facility_logits.squeeze())
         action2 = pi2.sample()
 
