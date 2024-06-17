@@ -5,6 +5,7 @@ from torch_geometric.nn import GCNConv, global_mean_pool, GAT, GATConv, GlobalAt
 import torch
 from typing import Sequence
 from dataclasses import dataclass
+import numpy as np
 
 
 @dataclass
@@ -162,12 +163,18 @@ class SwapGNN(nn.Module):
                  num_mlp_layers:int = 3,
                  num_heads=4,
                  activation=nn.ReLU,
-                 num_nodes: int = None):
+                 num_nodes: int = None,
+                 num_locations: int = 15,
+                 for_active: bool = True
+                 ):
         super(SwapGNN, self).__init__()
         self.num_nodes = num_nodes
+        self.for_active = for_active
+        self.num_locations = num_locations
         out_dim = 1
+        self.type_embedding = nn.Embedding(4, feature_dim_node)
         self.activation = activation()
-        self.att = GATConv(feature_dim_node, hidden_channels//num_heads, heads=num_heads)
+        self.att = GATConv(feature_dim_node + 1, hidden_channels//num_heads, heads=num_heads)
         self.hidden_atts = nn.ModuleList()
         for _ in range(num_gat_layers - 2):
             self.hidden_atts.append(GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads))
@@ -190,8 +197,6 @@ class SwapGNN(nn.Module):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.to(self.device)
 
-
-
     def _compute_conv_output_dim(self, input_shape: Sequence[int]):
         x = torch.rand(input_shape).unsqueeze(0)
         edges = torch.zeros(2, 2).to(torch.int64)
@@ -205,8 +210,17 @@ class SwapGNN(nn.Module):
 
     def forward(self, data: torch_geometric.data.Data,
                 batch: torch.Tensor = None,):
-        x, edge_index = data.x, data.edge_index
-
+        #x, edge_index = data.x, data.edge_index
+        if len(data.type.shape) > 2:
+            raise ValueError("Type should be a 1D tensor. Be sure it is not one hot encoded.")
+        x = self.type_embedding(data.type.long())
+        # normalize the requests
+        mean_requests = torch.mean(data.requests[self.num_locations:], dim=0)
+        std_requests = torch.std(data.requests[self.num_locations:], dim=0)
+        requests_norm = (data.requests[self.num_locations:] - mean_requests) / std_requests
+        requests_final = torch.cat([data.requests[:self.num_locations], requests_norm], dim=0)
+        x = torch.cat([x, requests_final.unsqueeze(1)], dim=-1)
+        edge_index = data.edge_index
         x = self.att(x, edge_index)
         x = self.activation(x)
         for att in self.hidden_atts:
@@ -218,18 +232,33 @@ class SwapGNN(nn.Module):
         for mlp in self.mlps:
             x = mlp(x)
 
+        # It should be possible that removed facility is the same as the new facility, then no movement is done
+        mask = data.active_mask if self.for_active else data.passive_mask
+        remove_mask = mask.clone()
+        remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -np.inf
+        remove_mask[:self.num_locations][mask[:self.num_locations] == -np.inf] = 0
+
         removed_facility_logits = self.final_mlp(x)
+        removed_facility_logits = removed_facility_logits.squeeze() + remove_mask
         pi1 = torch.distributions.Categorical(logits=removed_facility_logits.squeeze())
         action1 = pi1.sample()
 
+        # TODO: maybe add a mask for the new facility, such that the model cannot select a facility that
+        #  was not passive before
+
+        # Remove the action1 facility from the mask so that we allow for no reconfiguration
+        # In essence, this allows the model to select the same node for removing and selecting which is a no-op
+        mask[action1] = 0
         new_facility_logits = h_l1 @ nn.Tanh()(
             self.hidden_state_projector(h_l1[action1]).unsqueeze(0)).transpose(-2, -1)
+        new_facility_logits = new_facility_logits.squeeze() + mask
         pi2 = torch.distributions.Categorical(logits=new_facility_logits.squeeze())
         action2 = pi2.sample()
 
         logits = torch.stack([removed_facility_logits, new_facility_logits]).squeeze()
         actions = torch.stack([action1, action2],)
 
+        # Return action can be read as follows: Remove facility at index action1 and add facility at index action2
         return logits, actions
 
     @staticmethod
