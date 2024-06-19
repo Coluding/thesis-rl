@@ -9,6 +9,8 @@ from enum import Enum
 import plotly.graph_objects as go  # Import Plotly for visualization
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from abc import ABC, abstractmethod
+
 
 class ActionType(Enum):
     PASSIVE = 1
@@ -18,12 +20,14 @@ class ActionType(Enum):
 
 @dataclass
 class Penalty:
-    ReconfigurationPenalty: float = 100
+    ReconfigurationPenalty: float = 50
     PassiveCost: float = 10
     ActiveCost: float = 10
     WrongActiveAfterPassivePenalty: float = 100
     WrongActivePenalty: float = 100
+    WrongPassivePenalty: float = 100
     WrongNumberPassivePenalty: float = 100
+    ActiveNodeAlsoPassivePenalty: float = 500
 
 
 @dataclass
@@ -33,25 +37,53 @@ class PenaltyWeights:
     PassiveCost: float = 1
     ActiveCost: float = 1
     WrongActivePenalty: float = 1
+    WrongPassivePenalty: float = 1
     WrongActiveAfterPassivePenalty: float = 1
     WrongNumberPassivePenalty: float = 1
+    ActiveNodeAlsoPassivePenalty: float = 1
 
 
 class Regions(Enum):
     ASIA = "asia"
     EUROPE = "europe"
     USA = "usa"
+    AFRICA = "africa"
+    EU_WEST = "eu_west"
+    EU_EAST = "eu_east"
+    US_WEST = "us_west"
+    US_EAST = "us_east"
+    ASIA_EAST = "asia_east"
+    ASIA_WEST = "asia_west"
+    US_SOUTH = "us_south"
+
+
+@dataclass
+class RegionWithDistanceCalc:
+    region: Regions
+    coordinates: Tuple[float, float, float, float]
+    peak_times: Tuple[float, float]
+
+
+AsiaRegion = RegionWithDistanceCalc(Regions.ASIA, (60, 120, 10, 50), (0, 8))
+EuropeRegion = RegionWithDistanceCalc(Regions.EUROPE, (-10, 10, 40, 60), (8, 16))
+USRegion = RegionWithDistanceCalc(Regions.USA, (-130, -80, 20, 50), (16, 24))
+AfricaRegion = RegionWithDistanceCalc(Regions.AFRICA, (-20, 50, -40, 40), (12, 18))
+USSOUTHRegion = RegionWithDistanceCalc(Regions.US_SOUTH, (-130, -80, 10, 20), (16, 24))
 
 
 class NetworkEnvironment:
     def __init__(self,
                  num_centers: int, clusters: List[int],
                  num_clients: int, penalty: Optional[Penalty] = Penalty,
+                 region_objects: List[RegionWithDistanceCalc] = (AsiaRegion, EuropeRegion, USRegion),
                  penalty_weights: Optional[PenaltyWeights] = PenaltyWeights,
                  cluster_region_start=Regions.ASIA,
                  action_type: ActionType = ActionType.BOTH,
                  total_requests_per_interval=10000, k=3, p=1, client_start_region: Union[Regions, dict] = Regions.ASIA):
         self.graph = nx.Graph()
+        if len(clusters) != len(region_objects):
+            raise ValueError("The number of clusters must match the number of region objects")
+        self.region_objects = region_objects
         self.action_type = action_type
         self.data_centers = []
         self.penalty = penalty
@@ -102,23 +134,24 @@ class NetworkEnvironment:
         self.available_active_replicas = set(self.data_centers).difference(set(self.active_replicas))
         self.available_passive_replicas = set(self.data_centers).difference(set(self.passive_replicas))
 
+        self.penalty_tracker = []
         self.current_request_distribution = None
         self.current_latency = 0
 
     def _initialize_data_centers(self):
-        locations = ['europe', 'asia', 'usa']
-        for loc, count in zip(locations, self.clusters):
-            if loc == self.cluster_region_start.value:
+        for loc, count in zip(self.region_objects, self.clusters):
+            if loc.region == self.cluster_region_start:
                 active_inds = np.random.choice(count, self.k, replace=False)
-                passive_inds = np.random.choice([i for i in range(count) if i not in active_inds], self.p, replace=False)
+                passive_inds = np.random.choice([i for i in range(count) if i not in active_inds], self.p,
+                                                replace=False)
             for i in range(count):
-                dc_name = f'{loc}_dc_{i + 1}'
+                dc_name = f'{loc.region.value}_dc_{i + 1}'
                 self.data_centers.append(dc_name)
                 self.graph.add_node(dc_name, type=self.type_mapping['inactive'])
-                if loc == self.cluster_region_start.value and i in active_inds:
+                if loc.region == self.cluster_region_start and i in active_inds:
                     self.active_replicas.add(dc_name)
                     self.graph.nodes[dc_name]['type'] = self.type_mapping['active']
-                elif loc == self.cluster_region_start.value and i in passive_inds:
+                elif loc.region == self.cluster_region_start and i in passive_inds:
                     self.passive_replicas.add(dc_name)
                     self.graph.nodes[dc_name]['type'] = self.type_mapping['passive']
 
@@ -155,24 +188,18 @@ class NetworkEnvironment:
     def _generate_dc_positions(self):
         positions = {}
         for dc in self.data_centers:
-            if 'europe' in dc:
-                positions[dc] = (random.uniform(-10, 10), random.uniform(40, 60))  # Europe coordinates
-            elif 'asia' in dc:
-                positions[dc] = (random.uniform(60, 140), random.uniform(10, 50))  # Asia coordinates
-            elif 'usa' in dc:
-                positions[dc] = (random.uniform(-130, -60), random.uniform(20, 50))  # USA coordinates
+            for loc in self.region_objects:
+                if loc.region.value in dc:
+                    positions[dc] = (random.uniform(loc.coordinates[0], loc.coordinates[1]),
+                                     random.uniform(loc.coordinates[2], loc.coordinates[3]))
         self.positions = positions
 
     def _generate_client_positions(self):
         for client, region in self.client_regions.items():
-            if region == 'europe':
-                self.positions[client] = (random.uniform(-10, 10), random.uniform(40, 60))  # Close to Europe data centers
-            elif region == 'asia':
-                self.positions[client] = (random.uniform(60, 140), random.uniform(10, 50))  # Close to Asia data centers
-            elif region == 'usa':
-                self.positions[client] = (random.uniform(-130, -60), random.uniform(20, 50))  # Close to USA data centers
-            else:
-                self.positions[client] = (random.uniform(-180, 180), random.uniform(-90, 90))  # Random global coordinates
+            for loc in self.region_objects:
+                if loc.region.value in region:
+                    self.positions[client] = (random.uniform(loc.coordinates[0], loc.coordinates[1]),
+                                              random.uniform(loc.coordinates[2], loc.coordinates[3]))
 
     def reconfigure_active_nodes(self):
         self.update_client_latencies()
@@ -193,6 +220,9 @@ class NetworkEnvironment:
         if self.action_type == ActionType.PASSIVE:
             if action[0] not in self.passive_replicas:
                 raise ValueError("The suggested location to be replaced is currently not in the passive data centers")
+            if isinstance(action[0][0], int):
+                action = [action[0], action[1]]
+                action[0] = [self.int_to_dc[action[0]], self.int_to_dc[action[1]]]
             valid = self.review_passive_action(action)
             if valid:
                 self.passive_replicas.remove(action[0])
@@ -203,6 +233,9 @@ class NetworkEnvironment:
                 self.update_available_replicas()
             self.reconfigure_passive_nodes()
         elif self.action_type == ActionType.ACTIVE:
+            if isinstance(action[0][0], int):
+                action = [action[0], action[1]]
+                action[0] = [self.int_to_dc[action[0]], self.int_to_dc[action[1]]]
             if action[0] not in self.active_replicas:
                 raise ValueError("The suggested location to be replaced is currently not in the active data centers")
             valid = self._review_active_action(action)
@@ -217,20 +250,28 @@ class NetworkEnvironment:
         elif self.action_type == ActionType.BOTH:
             if len(action) != 2:
                 raise ValueError("Invalid action format. It must be a tuple of two tuples.")
+            if isinstance(action[0][0], int):
+                action = [action[0], action[1]]
+                action[0] = [self.int_to_dc[action[0][0]], self.int_to_dc[action[0][1]]]
+                action[1] = [self.int_to_dc[action[1][0]], self.int_to_dc[action[1][1]]]
             valid = self._review_active_action(action[0])
             if valid:
-                self.active_replicas.remove(action[0][0])
-                self.graph.nodes[action[0][0]]['type'] = self.type_mapping['inactive']
-                self.active_replicas.add(action[0][1])
-                self.graph.nodes[action[0][1]]['type'] = self.type_mapping['active']
-                self._review_active_action(action[0])
+                active_action_remove = action[0][0]
+                active_action_add = action[0][1]
+                self.active_replicas.remove(active_action_remove)
+                self.graph.nodes[active_action_remove]['type'] = self.type_mapping['inactive']
+                self.active_replicas.add(active_action_add)
+                self.graph.nodes[active_action_add]['type'] = self.type_mapping['active']
+                self._review_active_action((active_action_remove, active_action_add))
             valid = self.review_passive_action(action[1])
             if valid:
-                self.passive_replicas.remove(action[1][0])
-                self.graph.nodes[action[1][0]]['type'] = self.type_mapping['inactive']
-                self.passive_replicas.add(action[1][1])
+                passive_action_remove = action[1][0]
+                self.passive_replicas.remove(passive_action_remove)
+                self.graph.nodes[passive_action_remove]['type'] = self.type_mapping['inactive']
+                passive_action_add = action[1][1]
+                self.passive_replicas.add(passive_action_add)
                 self.graph.nodes[action[1][1]]['type'] = self.type_mapping['passive']
-                self._review_reconfiguration(action[1])
+                self._review_reconfiguration(passive_action_add)
             self.reconfigure_active_nodes()
             self.reconfigure_passive_nodes()
         else:
@@ -247,7 +288,14 @@ class NetworkEnvironment:
         """
         valid = True
         if action[1] in self.passive_replicas:
-            self.penalty_state += (self.penalty_weights.WrongActivePenalty * self.penalty.WrongActivePenalty)
+            self.penalty_state += (self.penalty_weights.WrongPassivePenalty * self.penalty.WrongPassivePenalty)
+            self.penalty_tracker.append("WrongPassivePenalty")
+            valid = False
+
+        if action[1] in self.active_replicas:
+            self.penalty_state += (self.penalty_weights.ActiveNodeAlsoPassivePenalty *
+                                   self.penalty.ActiveNodeAlsoPassivePenalty)
+            self.penalty_tracker.append("ActiveNodeAlsoPassivePenalty")
             valid = False
 
         return valid
@@ -258,12 +306,19 @@ class NetworkEnvironment:
         penalty state is triggered.
         """
         valid = True
-        if action[1] not in self.passive_history:
+        # Here we make sure that only a node that was previously passive should be made active
+        # This is not forced, i.e. the agent can opt to nelect this step. However, when done, there will be a penalty
+        # for the action. Important: This only concerns the passive nodes in the current interval. Hence, a node that
+        # was passive once in the history of the system but is not passive in the current interval does not count.
+        if action[1] not in self.passive_replicas:
             self.penalty_state += (self.penalty_weights.WrongActiveAfterPassivePenalty *
                                    self.penalty.WrongActiveAfterPassivePenalty)
+            self.penalty_tracker.append("WrongActiveAfterPassivePenalty")
 
-        if action[1] in self.active_replicas:
+        # This is to make sure that the number of active nodes does not exceed the limit.
+        if action[1] in self.active_replicas and action[0] != action[1]:
             self.penalty_state += (self.penalty_weights.WrongActivePenalty * self.penalty.WrongActivePenalty)
+            self.penalty_tracker.append("WrongActivePenalty")
             valid = False
 
         return valid
@@ -275,6 +330,7 @@ class NetworkEnvironment:
         """
         if action[0] != action[1]:
             self.penalty_state += (self.penalty_weights.ReconfigurationPenalty * self.penalty.ReconfigurationPenalty)
+            self.penalty_tracker.append("Reconfiguration")
 
     def update_active_dc_latencies(self, active_list):
         for dc1 in active_list:
@@ -309,59 +365,45 @@ class NetworkEnvironment:
                 total_latency += self.get_latency(active_replicas_list[i], active_replicas_list[j])
                 count += 1
 
-        self.current_latency =  total_latency / count if count != 0 else 0
+        self.current_latency = total_latency / count if count != 0 else 0
 
     def _distribute_requests(self):
         requests = np.random.dirichlet(self.client_weights, 1)[0] * self.total_requests_per_interval
         request_distribution = dict(zip(self.clients, requests.astype(int)))
         for client, num_requests in request_distribution.items():
             self.graph.nodes[client]['requests'] = num_requests
-        self.current_request_distribution =  request_distribution
+        self.current_request_distribution = request_distribution
+
 
     def _compute_time_distance_of_intervals(self, x: float, timepoint: float) -> float:
         dist = min(abs(x - timepoint), abs(24 + x - timepoint))
-
         if dist >= 10:
             dist *= 8
             return dist
         if dist >= 8:
             dist *= 6
             return dist
-
         if dist >= 6:
             dist *= 2
             return dist
-
         if dist == 0:
             return dist + 1e-6
-
         return dist
 
     def simulate_client_movements(self):
-        peak_times = {
-            'europe': (8, 16),
-            'asia': (0, 8),
-            'usa': (16, 24)
-        }
-
+        dists = {}
         for i, client in enumerate(self.clients):
-            dist_europe = self._compute_time_distance_of_intervals(
-                self.time_of_day, (peak_times['europe'][0]) / 2 + (peak_times['europe'][1]) / 2)
-            dist_asia = self._compute_time_distance_of_intervals(
-                self.time_of_day, (peak_times['asia'][0]) / 2 + (peak_times['asia'][1]) / 2)
-            dist_usa = self._compute_time_distance_of_intervals(
-                self.time_of_day, (peak_times['usa'][0]) / 2 + (peak_times['usa'][1]) / 2)
-
-            prob_europe = (1 / dist_europe) / (1 / dist_europe + 1 / dist_asia + 1 / dist_usa)
-            prob_asia = (1 / dist_asia) / (1 / dist_europe + 1 / dist_asia + 1 / dist_usa)
-            prob_usa = (1 / dist_usa) / (1 / dist_europe + 1 / dist_asia + 1 / dist_usa)
-
-            region = np.random.choice(['europe', 'asia', 'usa'], p=[prob_europe, prob_asia, prob_usa])
+            for loc in self.region_objects:
+                peak_times = loc.peak_times
+                dists[loc.region.value] = self._compute_time_distance_of_intervals(self.time_of_day,
+                                                                                   (peak_times[0] + peak_times[1]) / 2)
+            probs = [1 / dists[region] / sum(1 / dist for dist in dists.values()) for region in dists]
+            region = np.random.choice(self.region_objects, p=probs)
             self._move_client(client, region)
 
     def _move_client(self, client, region):
         for dc in self.active_replicas:
-            if region in dc:
+            if region.region.value in dc:
                 latency = random.randint(10, 100)
             else:
                 latency = random.randint(150, 750)
@@ -370,7 +412,7 @@ class NetworkEnvironment:
             except KeyError:
                 self.graph.add_edge(client, dc, latency=latency)
 
-            self.client_regions[client] = region
+            self.client_regions[client] = region.region.value
 
     def update_client_latencies(self):
         self.graph.remove_edges_from([(client, dc) for client in self.clients for dc in self.data_centers])
@@ -391,6 +433,7 @@ class NetworkEnvironment:
 
     def step(self, action: Optional[Union[Tuple[str, str], Tuple[Tuple[str, str], Tuple[str, str]]]] = None):
         self.penalty_state = 0
+        self.penalty_tracker = []
         self.simulate_client_movements()
         self._distribute_requests()
 
@@ -454,39 +497,23 @@ class NetworkEnvironment:
         labels = {}
         plt.clf()
         for node in self.graph.nodes:
-            if 'europe' in node:
-                pos[node] = (random.uniform(0, 1), random.uniform(0, 1))
-                if node in self.active_replicas:
-                    colors.append('darkblue')
-                elif node in self.passive_replicas:
-                    colors.append('blue')
-                else:
-                    colors.append('lightblue')
-
-            elif 'asia' in node:
-                pos[node] = (random.uniform(1, 2), random.uniform(1, 2))
-                if node in self.active_replicas:
-                    colors.append('darkred')
-                elif node in self.passive_replicas:
-                    colors.append('red')
-                else:
-                    colors.append('lightcoral')
-            elif 'usa' in node:
-                pos[node] = (random.uniform(2, 3), random.uniform(2, 3))
-                if node in self.active_replicas:
-                    colors.append('darkgreen')
-                elif node in self.passive_replicas:
-                    colors.append('green')
-                else:
-                    colors.append('lightgreen')
-            elif 'c_' in node[:2]:
-                pos[node] = (random.uniform(0, 3), random.uniform(0, 3))
-                colors.append('yellow')
+            for loc in self.region_objects:
+                if loc.region.value in node:
+                    pos[node] = (random.uniform(loc.coordinates[0], loc.coordinates[1]),
+                                 random.uniform(loc.coordinates[2], loc.coordinates[3]))
+                    if node in self.active_replicas:
+                        colors.append('green')
+                    elif node in self.passive_replicas:
+                        colors.append('blue')
+                    else:
+                        colors.append('gray')
+                elif 'c_' in node[:2]:
+                    pos[node] = (random.uniform(-10, 10), random.uniform(-10, 10))
+                    colors.append('yellow')
 
             labels[node] = node
 
         edge_labels = {(u, v): f"{d['latency']}" for u, v, d in self.graph.edges(data=True)}
-
         fig, ax = plt.subplots(figsize=(16, 8))
         #plt.figure(figsize=(15, 10))
         nx.draw(self.graph, pos, node_color=colors, with_labels=True, labels=labels, node_size=3000, font_size=10,
@@ -523,7 +550,6 @@ class NetworkEnvironment:
             node_trace = go.Scattergeo(
                 lon=[pos[0]],
                 lat=[pos[1]],
-                text=text,
                 mode='markers+text',
                 marker=dict(color=color, size=15),
                 name=node
@@ -581,7 +607,7 @@ class NetworkEnvironment:
             dict(label="Show Clients",
                  method="update",
                  args=[{"visible": [True] * len(data) + [True] * len(edges) + [False] * len(edges_with_weights)},
-                       {"title": f"Network Visualization with Clients at Time of Day: {self.time_of_day}"}]),
+                       {"title": f"Network Visualization with Clients at Time of Day: {self.time_of_day}:00"}]),
             dict(label="Hide Clients",
                  method="update",
                  args=[{"visible": [node['marker']['color'] != 'yellow' for node in data] + [False] * len(edges) + [
@@ -711,9 +737,11 @@ class NetworkEnvironment:
             ax.plot([pos_u[0], pos_v[0]], [pos_u[1], pos_v[1]], color='gray', linewidth=0.5, alpha=0.7,
                     transform=ccrs.PlateCarree())  # More transparent
 
-        plt.title(f"Network Visualization at Time of Day: {self.time_of_day} "
-                  f"with average latency of {self.current_latency:.4f} and \n"
-                  f"reconfiguration costs of {self.penalty_state:.4f}", fontsize=14)  # Larger title font
+        prefix = "0" if self.time_of_day < 10 else ""
+        plt.title(f"Network Visualization at Time of Day: {prefix}{self.time_of_day}:00"
+                  f" with average latency of {self.current_latency:.2f} and \n"
+                  f"reconfiguration costs of {self.penalty_state:.2f} \n"
+                  f"and penalties of {self.penalty_tracker}", fontsize=14)  # Larger title font
         plt.legend(fontsize=12)  # Larger legend font
 
         if return_fig:
@@ -763,6 +791,7 @@ def main():
             env.step()
 
             env.visualize_2d_world()
+
 
 if __name__ == "__main__":
     main()

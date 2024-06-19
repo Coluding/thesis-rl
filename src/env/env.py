@@ -267,8 +267,8 @@ class CustomNetworkConfig:
     num_passive: Optional[int] = 1
     client_start_region: Optional[str] = Regions.ASIA
     device: Optional[str] = "cpu"
-    render_mode: Optional[str] = "graph"
-    capture_video: Optional[bool] = False
+    render_mode: Optional[str] = "human"
+    render_type: Optional[str] = "2d"
     fps: Optional[int] = 2
 
 
@@ -350,20 +350,19 @@ class NetworkEnvGym(gym.Env):
 
     def step(self, action):
         state, reward, done = self.env.step(action)
-        self.render()
         return state, reward, done,False, {}
 
     def render_graph(self):
         # Generate the appropriate plot
-        if self.render_mode == 'graph':
+        if self.config.render_type == 'graph':
             fig: matplotlib.figure.Figure = self.env.visualize(return_fig=True)
         else:
             fig: matplotlib.figure.Figure = self.env.visualize_2d_world(return_fig=True)
 
-        if self.config.capture_video:
-            image = fig.canvas.draw()
-            image = np.frombuffer(image.tostring_rgb(), dtype='uint8')
-            image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        if self.config.render_mode == 'rgb_array':
+            fig.canvas.draw()
+            image = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+            image = image.reshape(3, 3200, -1)
             return image
         else:
             fig.show()
@@ -403,7 +402,7 @@ class NetworkEnvGym(gym.Env):
             httpd.serve_forever()
 
     def render_3d_world(self):
-        if self.config.capture_video:
+        if self.config.render_mode == 'rgb_array':
            raise ValueError("Capture video is not supported for 3D rendering")
 
         if self.screen is None:
@@ -443,14 +442,14 @@ class NetworkEnvGym(gym.Env):
                     self.paused = not self.paused
 
     def render(self) -> Optional[np.ndarray]:
-        if self.render_mode == 'graph' or self.render_mode == '2d':
-            if self.config.capture_video:
+        if self.config.render_type == 'graph' or self.config.render_type == '2d':
+            if self.config.render_mode == 'rgb_array':
                 return self.render_graph()
             self.render_graph()
-        elif self.render_mode == '3d':
+        elif self.config.render_type == '3d':
             self.render_3d_world()
         else:
-            raise ValueError(f"Invalid rendering mode: {self.render_mode}")
+            raise ValueError(f"Invalid rendering type: {self.render_mode}")
 
     def run(self):
         state = self.reset()
