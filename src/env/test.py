@@ -1,53 +1,59 @@
+import networkx as nx
+import matplotlib.pyplot as plt
 import numpy as np
-import plotly.graph_objects as go
 
-# Generate data
-x = np.cos(np.linspace(0, 2*np.pi,  100))
-y = np.sin(np.linspace(0, 2*np.pi, 100))
 
-x, y = np.meshgrid(x, y)
-z = 3 * x**2 * y - x*y + y**3
+def custom_layout(G, clusters, clients):
+    pos = {}
+    cluster_count = len(clusters)
+    spacing = 1.0 / (cluster_count + 1)
 
-# Create the surface plot
-surface = go.Surface(
-    z=z, x=x, y=y, colorscale='Viridis', showscale=False,
-    contours={
-        "z": {
-            "show": False,  # Disable background contours
-            "usecolormap": True,
-            "highlightcolor": "limegreen",
-            "project": {"z": True}
-        }
-    }
-)
+    # Position clusters horizontally with some vertical variation
+    for i, cluster in enumerate(clusters):
+        x = (i + 1) * spacing
+        y_spacing = 1.0 / (len(cluster) + 1)
+        for j, node in enumerate(cluster):
+            pos[node] = (x, (j + 1) * y_spacing)
 
-# Generate wireframe lines
-wireframe_lines = []
-for i in range(len(x)):
-    wireframe_lines.append(go.Scatter3d(x=x[i, :], y=y[i, :], z=z[i, :], mode='lines', line=dict(color='black', width=1)))
-    wireframe_lines.append(go.Scatter3d(x=x[:, i], y=y[:, i], z=z[:, i], mode='lines', line=dict(color='black', width=1)))
+    # Position clients randomly
+    for client in clients:
+        pos[client] = (np.random.rand(), np.random.rand())
 
-# Create contour plot on the bottom
-contours = go.Contour(z=z, x=x[0], y=y[:, 0], colorscale='Viridis', showscale=False, line=dict(width=2))
+    return pos
 
-# Combine all traces
-data = [surface] + wireframe_lines + [contours]
 
-# Define layout
-layout = go.Layout(
-    title='3D Surface Plot with Wireframe and Contours',
-    scene=dict(
-        xaxis=dict(title='X'),
-        yaxis=dict(title='Y'),
-        zaxis=dict(title='Z'),
-        camera=dict(
-            eye=dict(x=1.87, y=0.88, z=-0.64)
-        )
-    ),
-    autosize=True,  # Make the graph full screen
-    margin=dict(l=0, r=0, b=0, t=30)  # Adjust margins for full screen
-)
+# Example of creating a graph
+G = nx.Graph()
 
-# Create the figure and display it
-fig = go.Figure(data=data, layout=layout)
-fig.show()
+# Define clusters and clients
+clusters = [
+    ['c1n1', 'c1n2', 'c1n3'],
+    ['c2n1', 'c2n2', 'c2n3'],
+    ['c3n1', 'c3n2', 'c3n3']
+]
+
+clients = ['client1', 'client2', 'client3']
+
+# Add nodes and edges
+for cluster in clusters:
+    G.add_nodes_from(cluster)
+    for i in range(len(cluster) - 1):
+        G.add_edge(cluster[i], cluster[i + 1], latency=np.random.rand())
+
+G.add_nodes_from(clients)
+for client in clients:
+    # Connect clients to random nodes in random clusters
+    ind = np.random.choice(np.arange(len(clusters)))
+    cluster = clusters[ind]
+    node = np.random.choice(cluster)
+    G.add_edge(client, node, latency=np.random.rand())
+
+# Get custom layout
+pos = custom_layout(G, clusters, clients)
+
+# Plot the graph
+plt.figure(figsize=(12, 8))
+nx.draw(G, pos, with_labels=True, node_color='skyblue', node_size=2000, edge_color='gray')
+nx.draw_networkx_edge_labels(G, pos, edge_labels={(u, v): f"{d['latency']:.2f}" for u, v, d in G.edges(data=True)})
+plt.title('Data Center Network Graph')
+plt.show()

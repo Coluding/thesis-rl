@@ -62,13 +62,81 @@ class RegionWithDistanceCalc:
     region: Regions
     coordinates: Tuple[float, float, float, float]
     peak_times: Tuple[float, float]
+    intra_region_latencies: Tuple[float, float]
 
 
-AsiaRegion = RegionWithDistanceCalc(Regions.ASIA, (60, 120, 10, 50), (0, 8))
-EuropeRegion = RegionWithDistanceCalc(Regions.EUROPE, (-10, 10, 40, 60), (8, 16))
-USRegion = RegionWithDistanceCalc(Regions.USA, (-130, -80, 20, 50), (16, 24))
-AfricaRegion = RegionWithDistanceCalc(Regions.AFRICA, (-20, 50, -40, 40), (12, 18))
-USSOUTHRegion = RegionWithDistanceCalc(Regions.US_SOUTH, (-130, -80, 10, 20), (16, 24))
+AsiaRegion = RegionWithDistanceCalc(Regions.ASIA, (60, 120, 10, 50), (0, 8), (10, 70))
+EuropeRegion = RegionWithDistanceCalc(Regions.EUROPE, (-10, 10, 40, 60), (8, 16), (10, 40))
+USRegion = RegionWithDistanceCalc(Regions.USA, (-130, -80, 20, 50), (16, 24), (20, 60))
+AfricaRegion = RegionWithDistanceCalc(Regions.AFRICA, (-20, 50, -40, 40), (12, 18), (30, 70))
+USSOUTHRegion = RegionWithDistanceCalc(Regions.US_SOUTH, (-130, -80, 10, 20), (16, 24), (15, 45))
+
+latencies = {
+    (Regions.ASIA, Regions.EUROPE): (200, 260),
+    (Regions.ASIA, Regions.USA): (270, 330),
+    (Regions.ASIA, Regions.AFRICA): (220, 280),
+    (Regions.ASIA, Regions.EU_WEST): (190, 230),
+    (Regions.ASIA, Regions.EU_EAST): (200, 240),
+    (Regions.ASIA, Regions.US_WEST): (260, 320),
+    (Regions.ASIA, Regions.US_EAST): (290, 350),
+    (Regions.ASIA, Regions.ASIA_EAST): (60, 100),
+    (Regions.ASIA, Regions.ASIA_WEST): (80, 120),
+    (Regions.ASIA, Regions.US_SOUTH): (280, 340),
+
+    (Regions.EUROPE, Regions.USA): (100, 140),
+    (Regions.EUROPE, Regions.AFRICA): (150, 210),
+    (Regions.EUROPE, Regions.EU_WEST): (30, 50),
+    (Regions.EUROPE, Regions.EU_EAST): (40, 60),
+    (Regions.EUROPE, Regions.US_WEST): (140, 180),
+    (Regions.EUROPE, Regions.US_EAST): (110, 150),
+    (Regions.EUROPE, Regions.ASIA_EAST): (200, 260),
+    (Regions.EUROPE, Regions.ASIA_WEST): (170, 230),
+    (Regions.EUROPE, Regions.US_SOUTH): (120, 160),
+
+    (Regions.USA, Regions.AFRICA): (190, 250),
+    (Regions.USA, Regions.EU_WEST): (90, 130),
+    (Regions.USA, Regions.EU_EAST): (100, 140),
+    (Regions.USA, Regions.US_WEST): (50, 90),
+    (Regions.USA, Regions.US_EAST): (20, 40),
+    (Regions.USA, Regions.ASIA_EAST): (270, 330),
+    (Regions.USA, Regions.ASIA_WEST): (260, 320),
+    (Regions.USA, Regions.US_SOUTH): (30, 70),
+
+    (Regions.AFRICA, Regions.EU_WEST): (130, 190),
+    (Regions.AFRICA, Regions.EU_EAST): (140, 200),
+    (Regions.AFRICA, Regions.US_WEST): (200, 260),
+    (Regions.AFRICA, Regions.US_EAST): (180, 240),
+    (Regions.AFRICA, Regions.ASIA_EAST): (220, 280),
+    (Regions.AFRICA, Regions.ASIA_WEST): (210, 270),
+    (Regions.AFRICA, Regions.US_SOUTH): (190, 250),
+
+    (Regions.EU_WEST, Regions.EU_EAST): (10, 30),
+    (Regions.EU_WEST, Regions.US_WEST): (130, 170),
+    (Regions.EU_WEST, Regions.US_EAST): (100, 140),
+    (Regions.EU_WEST, Regions.ASIA_EAST): (190, 250),
+    (Regions.EU_WEST, Regions.ASIA_WEST): (180, 240),
+    (Regions.EU_WEST, Regions.US_SOUTH): (110, 150),
+
+    (Regions.EU_EAST, Regions.US_WEST): (140, 180),
+    (Regions.EU_EAST, Regions.US_EAST): (110, 150),
+    (Regions.EU_EAST, Regions.ASIA_EAST): (200, 260),
+    (Regions.EU_EAST, Regions.ASIA_WEST): (190, 250),
+    (Regions.EU_EAST, Regions.US_SOUTH): (120, 160),
+
+    (Regions.US_WEST, Regions.US_EAST): (50, 90),
+    (Regions.US_WEST, Regions.ASIA_EAST): (250, 310),
+    (Regions.US_WEST, Regions.ASIA_WEST): (240, 300),
+    (Regions.US_WEST, Regions.US_SOUTH): (40, 80),
+
+    (Regions.US_EAST, Regions.ASIA_EAST): (280, 340),
+    (Regions.US_EAST, Regions.ASIA_WEST): (270, 330),
+    (Regions.US_EAST, Regions.US_SOUTH): (30, 70),
+
+    (Regions.ASIA_EAST, Regions.ASIA_WEST): (60, 100),
+    (Regions.ASIA_EAST, Regions.US_SOUTH): (280, 340),
+
+    (Regions.ASIA_WEST, Regions.US_SOUTH): (270, 330),
+}
 
 
 class NetworkEnvironment:
@@ -110,7 +178,7 @@ class NetworkEnvironment:
         self.time_of_day = 0  # Internal time counter
         self.k = k  # Number of active data centers
         self.p = p  # Number of passive data centers
-
+        self.str_to_region = None
         self._initialize_data_centers()
 
         self.dc_to_int = {dc: i for i, dc in enumerate(self.data_centers)}
@@ -157,6 +225,8 @@ class NetworkEnvironment:
 
                 self.graph.nodes[dc_name]['requests'] = 0
 
+        self.str_to_region = {loc.region.value: loc for loc in self.region_objects}
+
     def _initialize_internal_latencies(self):
         intra_cluster_latency = (10, 100)
         inter_cluster_latency = (100, 500)
@@ -166,9 +236,19 @@ class NetworkEnvironment:
                 dc1 = self.data_centers[i]
                 dc2 = self.data_centers[j]
                 if dc1.split('_')[0] == dc2.split('_')[0]:
-                    latency = random.randint(*intra_cluster_latency)
+                    region_calc = self.str_to_region[dc1.split('_')[0]]
+                    latency = random.randint(*region_calc.intra_region_latencies)
                 else:
-                    latency = random.randint(*inter_cluster_latency)
+                    region_calc_1 = self.str_to_region[dc1.split('_')[0]]
+                    region_calc_2 = self.str_to_region[dc2.split('_')[0]]
+                    comb1 = (region_calc_1.region, region_calc_2.region)
+                    comb2 = (region_calc_2.region, region_calc_1.region)
+                    if comb1 in latencies:
+                        latency = random.randint(*latencies[comb1])
+                    elif comb2 in latencies:
+                        latency = random.randint(*latencies[comb2])
+                    else:
+                        raise ValueError(f"Latency between {region_calc_1.region} and {region_calc_2.region} not found")
                 self.internal_latencies[(dc1, dc2)] = latency
                 self.internal_latencies[(dc2, dc1)] = latency
 

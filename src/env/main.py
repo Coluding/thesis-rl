@@ -11,7 +11,7 @@ from src.env.env import (IntervalResult,
                          TorchGraphNetworkxWrapper,
                          NetworkEnvGym,
                          CustomNetworkConfig)
-from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN
+from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN
 
 def use_java():
     critic = CriticGCNN(4, 48, 24, 128, num_nodes=15)
@@ -40,12 +40,18 @@ def use_java():
 def use_custom():
     import time
     clusters = [5, 5, 5]
-    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="human",
-                                 render_type="2d")
+    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="rgb_array",
+                                 render_type="2d", device="cuda")
     swap_active = SwapGNN(4, 4, 64, 128, num_nodes=15,
                           for_active=True, num_locations=sum(clusters))
     swap_passive = SwapGNN(4, 4, 64, 128, num_nodes=15,
                            for_active=False, num_locations=sum(clusters))
+
+    critic_active = CriticSwapGNN(4, 4, 64, 128, num_nodes=15,
+                                  for_active=True, num_locations=sum(clusters))
+
+    critic_passive = CriticSwapGNN(4, 4, 64, 128, num_nodes=15,
+                                   for_active=False, num_locations=sum(clusters))
 
     env = NetworkEnvGym(config)
     env = TorchGraphNetworkxWrapper(env, one_hot=False)
@@ -79,9 +85,15 @@ def use_custom():
             action = ((remove_dc, add_dc), (remove_passive, add_dc_pa))
         else:
             action_active = swap_active(state)
+            action_active = action_active[1]
             action_passive = swap_passive(state)
-            action = ((action_active[1][0].item(), action_active[1][1].item()),
-                      (action_passive[1][0].item(), action_passive[1][1].item()))
+            action_passive = action_passive[1]
+            value_active = critic_active(state)
+            baseline_active = value_active[[action_active[0], action_active[1]], [0,1]]
+            value_passive = critic_passive(state)
+            baseline_passive = value_passive[[action_passive[0], action_passive[1]], [0,1]]
+            action = ((action_active[0].item(), action_active[1].item()),
+                      (action_passive[0].item(), action_passive[1].item()))
         print(f"Time: {i}")
         print(f"Active action: {action_active[1]}")
         print(f"Passive action: {action_passive[1]}")

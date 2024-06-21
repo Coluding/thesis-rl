@@ -261,7 +261,7 @@ class CustomNetworkConfig:
     penalty: Optional[Penalty] = Penalty
     penalty_weights: Optional[PenaltyWeights] = PenaltyWeights
     cluster_region_start: Optional[Regions] = Regions.ASIA
-    action_type: Optional[ActionType.BOTH] = ActionType.BOTH
+    action_type: Optional[ActionType] = ActionType.BOTH
     total_requests_per_interval: Optional[int] = 10000
     num_active: Optional[int] = 3
     num_passive: Optional[int] = 1
@@ -481,6 +481,9 @@ class TorchGraphNetworkxWrapper(gym.ObservationWrapper):
         if self.one_hot:
             torch_graph.type = torch.nn.functional.one_hot(torch_graph.type)
 
+        if "active_mask" in torch_graph:
+            torch_graph.passive_mask = torch_graph.passive_mask.to(self.device)
+            torch_graph.active_mask = torch_graph.active_mask.to(self.device)
         torch_graph.type = torch_graph.type.to(torch.float32).to(self.device)
         torch_graph.requests = torch_graph.requests.to(torch.float32).to(self.device)
         torch_graph.edge_index = torch_graph.edge_index.to(self.device)
