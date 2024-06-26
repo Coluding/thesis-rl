@@ -16,14 +16,17 @@ from gym import spaces
 from gym.core import ActType, ObsType
 from gym.spaces.space import T_cov
 from torch_geometric.utils.convert import from_networkx
+from torch_geometric.data import Data, TemporalData
 from abc import ABC, abstractmethod
 import torch_geometric
-import webbrowser
+import webbrowser  #
+from collections import deque
 import time
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 import pygame
 
-from network_simulation import NetworkEnvironment, Penalty, PenaltyWeights, ActionType, Regions
+from src.env.network_simulation import NetworkEnvironment, Penalty, PenaltyWeights, ActionType, Regions
+
 
 @dataclass
 class RSMEnvConfig:
@@ -84,7 +87,7 @@ class SimulationBase(ABC):
         pass
 
 
-#TODO: What happens when the number of nodes varies between intervals -> especially rendering method?
+# TODO: What happens when the number of nodes varies between intervals -> especially rendering method?
 class RSMEnv(Env):
     render_mode = ['human', "human_constant_node", "rgb_array"]
     """
@@ -138,7 +141,6 @@ class RSMEnv(Env):
         """
         Render the graph using matplotlib.
         """
-
 
         fig, ax = plt.subplots(figsize=(8, 6))
         canvas = FigureCanvas(fig)
@@ -289,8 +291,10 @@ class NetworkEnvGym(gym.Env):
 
         if config.action_type == ActionType.BOTH:
             self.action_space = spaces.Tuple((
-                spaces.Tuple((spaces.Discrete(len(self.env.data_centers)), spaces.Discrete(len(self.env.data_centers)))),
-                spaces.Tuple((spaces.Discrete(len(self.env.data_centers)), spaces.Discrete(len(self.env.data_centers)))),
+                spaces.Tuple(
+                    (spaces.Discrete(len(self.env.data_centers)), spaces.Discrete(len(self.env.data_centers)))),
+                spaces.Tuple(
+                    (spaces.Discrete(len(self.env.data_centers)), spaces.Discrete(len(self.env.data_centers)))),
             ))  # Define your action space
         else:
             self.action_space = spaces.Tuple((
@@ -350,7 +354,7 @@ class NetworkEnvGym(gym.Env):
 
     def step(self, action):
         state, reward, done = self.env.step(action)
-        return state, reward, done,False, {}
+        return state, reward, done, False, {}
 
     def render_graph(self):
         # Generate the appropriate plot
@@ -368,8 +372,8 @@ class NetworkEnvGym(gym.Env):
             fig.show()
             plt.pause(0.1)
             plt.close()
-            #fig.savefig("plot.png")
-            #plt.close(fig)
+            # fig.savefig("plot.png")
+            # plt.close(fig)
 
     @staticmethod
     def _setup_png_server():
@@ -383,6 +387,7 @@ class NetworkEnvGym(gym.Env):
     def _setup_internal_server():
         PORT = 8000
         Handler = http.server.SimpleHTTPRequestHandler
+
         def start_server():
             with socketserver.TCPServer(("", PORT), Handler) as httpd:
                 print(f"Serving at port {PORT}")
@@ -403,7 +408,7 @@ class NetworkEnvGym(gym.Env):
 
     def render_3d_world(self):
         if self.config.render_mode == 'rgb_array':
-           raise ValueError("Capture video is not supported for 3D rendering")
+            raise ValueError("Capture video is not supported for 3D rendering")
 
         if self.screen is None:
             pygame.init()
@@ -468,12 +473,20 @@ class NetworkEnvGym(gym.Env):
             pygame.quit()
             self.screen = None
 
+    def no_op_active(self):
+        return self.env.no_op_active()
+
+    def no_op_passive(self):
+        return self.env.no_op_passive()
+
 
 class TorchGraphNetworkxWrapper(gym.ObservationWrapper):
     def __init__(self, env: NetworkEnvGym, one_hot: bool = False):
         super().__init__(env)
         self.one_hot = one_hot
         self.device = env.config.device
+        self.inner_env = env
+        self.base_env = env.env
 
     def observation(self, observation: nx.Graph) -> torch_geometric.data.Data:
         torch_graph = from_networkx(observation)
@@ -489,3 +502,60 @@ class TorchGraphNetworkxWrapper(gym.ObservationWrapper):
         torch_graph.edge_index = torch_graph.edge_index.to(self.device)
 
         return torch_graph
+
+
+class StackStatesTemporal(gym.ObservationWrapper):
+    def __init__(self, env: gym.Env, num_states: int):
+        super().__init__(env)
+        self.num_states = num_states
+
+        # Define the node and edge spaces for a single graph
+        self.node_space = spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
+        self.edge_space = spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
+
+        # Adjust the observation space to accommodate stacking
+        self.observation_space = spaces.Dict({
+            'node_features': spaces.Box(low=0, high=np.inf, shape=(self.num_states, 4), dtype=np.float32),
+            'edge_features': spaces.Box(low=0, high=np.inf, shape=(self.num_states, 1), dtype=np.float32)
+        })
+
+        self.stack = deque(maxlen=num_states)
+        self._initialize_stack()
+
+    def add_temporal_edges(self, graphs: List[Data]) -> torch.Tensor:
+        num_nodes = graphs[0].num_nodes
+        temporal_edges = []
+
+        for t in range(len(graphs) - 1):
+            for i in range(num_nodes):
+                temporal_edges.append([i + t * num_nodes, i + (t + 1) * num_nodes])
+
+        return torch.tensor(temporal_edges).t().contiguous().to(graphs[0].requests.device)
+
+    def _initialize_stack(self):
+        if len(self.stack) == 0:
+            reset_state, _ = self.env.reset()
+            for _ in range(self.num_states):
+                self.stack.append(reset_state)
+
+    def merge_graphs(self, graphs: List[Data], temporal_edges: torch.Tensor) -> Data:
+        requests = torch.cat([graph.requests for graph in graphs], dim=0)
+        edge_index = torch.cat([graph.edge_index + i * graph.num_nodes for i, graph in enumerate(graphs)], dim=1)
+        # edge_index = torch.cat([edge_index, temporal_edges], dim=1)
+        active_mask = torch.cat([graph.active_mask for graph in graphs], dim=0)
+        passive_mask = torch.cat([graph.passive_mask for graph in graphs], dim=0)
+        types = torch.cat([graph.type for graph in graphs], dim=0)
+
+        merged_graph = TemporalData(type=types, edge_index=edge_index, requests=requests, active_mask=active_mask,
+                                    passive_mask=passive_mask, t=torch.arange(self.num_states))
+
+        return merged_graph
+
+    def observation(self, observation: Data) -> Data:
+        self.stack.append(observation)
+        graphs = list(self.stack)
+
+        temporal_edges = self.add_temporal_edges(graphs)
+        combined_graph = self.merge_graphs(graphs, temporal_edges)
+
+        return combined_graph

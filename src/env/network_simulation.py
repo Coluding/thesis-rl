@@ -11,6 +11,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from abc import ABC, abstractmethod
 
+#TODO: Different reward for active and passive nodes
 
 class ActionType(Enum):
     PASSIVE = 1
@@ -28,7 +29,7 @@ class Penalty:
     WrongPassivePenalty: float = 100
     WrongNumberPassivePenalty: float = 100
     ActiveNodeAlsoPassivePenalty: float = 500
-
+    NewEdgesDiscoveredReward: float = 300
 
 @dataclass
 class PenaltyWeights:
@@ -41,6 +42,9 @@ class PenaltyWeights:
     WrongActiveAfterPassivePenalty: float = 1
     WrongNumberPassivePenalty: float = 1
     ActiveNodeAlsoPassivePenalty: float = 1
+    ReExplorationPassiveWeight: float = 1
+    EdgeDifferenceWeight: float = 1
+    NewEdgesDiscoveredReward: float = 1
 
 
 class Regions(Enum):
@@ -147,7 +151,9 @@ class NetworkEnvironment:
                  penalty_weights: Optional[PenaltyWeights] = PenaltyWeights,
                  cluster_region_start=Regions.ASIA,
                  action_type: ActionType = ActionType.BOTH,
+                 period_length=5000,
                  total_requests_per_interval=10000, k=3, p=1, client_start_region: Union[Regions, dict] = Regions.ASIA):
+        self.global_step = 1
         self.graph = nx.Graph()
         if len(clusters) != len(region_objects):
             raise ValueError("The number of clusters must match the number of region objects")
@@ -194,7 +200,8 @@ class NetworkEnvironment:
         #self._initialize_edges()
         self._initialize_clients()
 
-        self.penalty_state = 0
+        self._active_penalty_state = 0
+        self._passive_penalty_state = 0
         self.positions = {}
         self._generate_dc_positions()
         self._generate_client_positions()  # New attribute for positions
@@ -202,9 +209,22 @@ class NetworkEnvironment:
         self.available_active_replicas = set(self.data_centers).difference(set(self.active_replicas))
         self.available_passive_replicas = set(self.data_centers).difference(set(self.passive_replicas))
 
-        self.penalty_tracker = []
+        self.active_penalty_tracker = []
+        self.passive_penalty_tracker = []
         self.current_request_distribution = None
         self.current_latency = 0
+
+        self._add_mask_to_graph()
+
+        self.period_length = period_length
+        self._total_number_of_edges = self._compute_total_number_of_potential_edges_between_dcs()
+
+    def _compute_total_number_of_potential_edges_between_dcs(self):
+        total = 0
+        for i in range(len(self.data_centers)):
+            for j in range(i + 1, len(self.data_centers)):
+                total += 1
+        return total
 
     def _initialize_data_centers(self):
         for loc, count in zip(self.region_objects, self.clusters):
@@ -224,8 +244,21 @@ class NetworkEnvironment:
                     self.graph.nodes[dc_name]['type'] = self.type_mapping['passive']
 
                 self.graph.nodes[dc_name]['requests'] = 0
+                self.graph.nodes[dc_name]['update_step'] = self.global_step
 
         self.str_to_region = {loc.region.value: loc for loc in self.region_objects}
+
+    def _add_mask_to_graph(self):
+        for node in self.graph.nodes:
+            if node in self.available_active_replicas:
+                self.graph.nodes[node]['active_mask'] = 0
+            else:
+                self.graph.nodes[node]['active_mask'] = -np.inf
+
+            if node in self.available_passive_replicas:
+                self.graph.nodes[node]['passive_mask'] = 0
+            else:
+                self.graph.nodes[node]['passive_mask'] = -np.inf
 
     def _initialize_internal_latencies(self):
         intra_cluster_latency = (10, 100)
@@ -256,6 +289,7 @@ class NetworkEnvironment:
         for c in self.clients:
             self.graph.add_node(c, type=self.type_mapping['client'])
             self.graph.nodes[c]['requests'] = 0
+            self.graph.nodes[c]['update_step'] = self.global_step
 
     def _initialize_edges(self):
         for client in self.clients:
@@ -309,7 +343,8 @@ class NetworkEnvironment:
                 self.graph.nodes[action[0]]['type'] = 'inactive'
                 self.passive_replicas.add(action[1])
                 self.graph.nodes[action[1]]['type'] = 'passive'
-                self._review_reconfiguration(action)
+                self.graph.nodes[action[1]]["update_step"] = self.global_step
+                self._review_reconfiguration(action, active=False)
                 self.update_available_replicas()
             self.reconfigure_passive_nodes()
         elif self.action_type == ActionType.ACTIVE:
@@ -324,7 +359,8 @@ class NetworkEnvironment:
                 self.graph.nodes[action[0]]['type'] = self.type_mapping['inactive']
                 self.active_replicas.add(action[1])
                 self.graph.nodes[action[1]]['type'] = self.type_mapping['active']
-                self._review_reconfiguration(action)
+                self.graph.nodes[action[1]]["update_step"] = self.global_step
+                self._review_reconfiguration(action, active=True)
                 self.update_available_replicas()
             self.reconfigure_active_nodes()
         elif self.action_type == ActionType.BOTH:
@@ -342,7 +378,9 @@ class NetworkEnvironment:
                 self.graph.nodes[active_action_remove]['type'] = self.type_mapping['inactive']
                 self.active_replicas.add(active_action_add)
                 self.graph.nodes[active_action_add]['type'] = self.type_mapping['active']
+                self.graph.nodes[active_action_add]["update_step"] = self.global_step
                 self._review_active_action((active_action_remove, active_action_add))
+                self._review_reconfiguration((active_action_remove, active_action_add), active=True)
             valid = self.review_passive_action(action[1])
             if valid:
                 passive_action_remove = action[1][0]
@@ -351,7 +389,8 @@ class NetworkEnvironment:
                 passive_action_add = action[1][1]
                 self.passive_replicas.add(passive_action_add)
                 self.graph.nodes[action[1][1]]['type'] = self.type_mapping['passive']
-                self._review_reconfiguration(passive_action_add)
+                self.graph.nodes[action[1][1]]["update_step"] = self.global_step
+                self._review_reconfiguration(passive_action_add, active=False)
             self.reconfigure_active_nodes()
             self.reconfigure_passive_nodes()
         else:
@@ -368,15 +407,31 @@ class NetworkEnvironment:
         """
         valid = True
         if action[1] in self.passive_replicas:
-            self.penalty_state += (self.penalty_weights.WrongPassivePenalty * self.penalty.WrongPassivePenalty)
-            self.penalty_tracker.append("WrongPassivePenalty")
+            self._passive_penalty_state -= (self.penalty_weights.WrongPassivePenalty * self.penalty.WrongPassivePenalty)
+            self.passive_penalty_tracker.append("WrongPassivePenalty")
             valid = False
 
         if action[1] in self.active_replicas:
-            self.penalty_state += (self.penalty_weights.ActiveNodeAlsoPassivePenalty *
+            self._passive_penalty_state -= (self.penalty_weights.ActiveNodeAlsoPassivePenalty *
                                    self.penalty.ActiveNodeAlsoPassivePenalty)
-            self.penalty_tracker.append("ActiveNodeAlsoPassivePenalty")
+            self.passive_penalty_tracker.append("ActiveNodeAlsoPassivePenalty")
             valid = False
+
+        old_passive, new_passive = action
+        new_node = self.graph.nodes[new_passive]
+
+        waiting_time_to_reexplore = self.global_step - new_node['update_step']
+        edges_difference = self._total_number_of_edges - len(self.graph.edges)
+
+        # give extra reward if node was selected with no previous edges
+        bonus_new_edges = 0
+        if self.graph.degree(new_passive) == 0:
+            bonus_new_edges = self.penalty.NewEdgesDiscoveredReward
+
+        self._passive_penalty_state += (self.penalty_weights.ReExplorationPassiveWeight * waiting_time_to_reexplore)
+        self._passive_penalty_state += (self.penalty_weights.EdgeDifferenceWeight * edges_difference)
+        self._passive_penalty_state += (self.penalty_weights.NewEdgesDiscoveredReward * bonus_new_edges)
+
 
         return valid
 
@@ -391,26 +446,34 @@ class NetworkEnvironment:
         # for the action. Important: This only concerns the passive nodes in the current interval. Hence, a node that
         # was passive once in the history of the system but is not passive in the current interval does not count.
         if action[1] not in self.passive_replicas:
-            self.penalty_state += (self.penalty_weights.WrongActiveAfterPassivePenalty *
+            self._active_penalty_state += (self.penalty_weights.WrongActiveAfterPassivePenalty *
                                    self.penalty.WrongActiveAfterPassivePenalty)
-            self.penalty_tracker.append("WrongActiveAfterPassivePenalty")
+            self.active_penalty_tracker.append("WrongActiveAfterPassivePenalty")
 
         # This is to make sure that the number of active nodes does not exceed the limit.
         if action[1] in self.active_replicas and action[0] != action[1]:
-            self.penalty_state += (self.penalty_weights.WrongActivePenalty * self.penalty.WrongActivePenalty)
-            self.penalty_tracker.append("WrongActivePenalty")
+            self._active_penalty_state += (self.penalty_weights.WrongActivePenalty * self.penalty.WrongActivePenalty)
+            self.active_penalty_tracker.append("WrongActivePenalty")
             valid = False
 
         return valid
 
-    def _review_reconfiguration(self, action: Tuple[str, str]):
+    def _review_reconfiguration(self, action: Tuple[str, str], active: bool):
         """
         Review the reconfiguration to check whether new nodes were selected. If so, the internal penalty state is
         triggered.
         """
         if action[0] != action[1]:
-            self.penalty_state += (self.penalty_weights.ReconfigurationPenalty * self.penalty.ReconfigurationPenalty)
-            self.penalty_tracker.append("Reconfiguration")
+            if active:
+                tracker = self.active_penalty_tracker
+                self._active_penalty_state += (self.penalty_weights.ReconfigurationPenalty *
+                                               self.penalty.ReconfigurationPenalty)
+            else:
+                tracker = self.passive_penalty_tracker
+                self._passive_penalty_state -= (self.penalty_weights.ReconfigurationPenalty *
+                                                self.penalty.ReconfigurationPenalty)
+
+            tracker.append("Reconfiguration")
 
     def update_active_dc_latencies(self, active_list):
         for dc1 in active_list:
@@ -512,7 +575,8 @@ class NetworkEnvironment:
             self.internal_latencies[key] += fluctuation
 
     def step(self, action: Optional[Union[Tuple[str, str], Tuple[Tuple[str, str], Tuple[str, str]]]] = None):
-        self.penalty_state = 0
+        self._active_penalty_state = 0
+        self._passive_penalty_state = 0
         self.penalty_tracker = []
         self.simulate_client_movements()
         self._distribute_requests()
@@ -527,27 +591,31 @@ class NetworkEnvironment:
                 total_latency += latency * num_requests
         self._aggregate_latency()
 
-        reward = self.penalty_weights.LatencyPenalty * (-self.current_latency) - self.penalty_state
+        reward = self._get_active_and_passive_reward()
 
         self.time_of_day = (self.time_of_day + 1) % 24
         self.fluctuate_latencies()
 
         state = self.graph
+
         done = False
+        if self.global_step >= self.period_length:
+            done = True
+            self.global_step = 0
 
-        # add action mask here
-        for node in state.nodes:
-            if node in self.available_active_replicas:
-                state.nodes[node]['active_mask'] = 0
-            else:
-                state.nodes[node]['active_mask'] = -np.inf
+        self._add_mask_to_graph()
 
-            if node in self.available_passive_replicas:
-                state.nodes[node]['passive_mask'] = 0
-            else:
-                state.nodes[node]['passive_mask'] = -np.inf
+        self.global_step += 1
 
         return state, reward, done
+
+    def _get_active_and_passive_reward(self):
+        active_reward = self.penalty_weights.LatencyPenalty * (-self.current_latency) - self._active_penalty_state
+        passive_reward = self._passive_penalty_state
+
+        return active_reward, passive_reward
+
+
 
     def reset(self):
         self.time_of_day = 0
@@ -561,6 +629,21 @@ class NetworkEnvironment:
 
     def get_internal_state(self):
         return self.internal_latencies
+
+    def convert_int_to_dc(self, action):
+        return [self.int_to_dc[dc] for dc in action]
+
+    def no_op_active(self):
+        remove_dc = random.choice(list(self.active_replicas))
+        add_dc = remove_dc
+
+        return remove_dc, add_dc
+
+    def no_op_passive(self):
+        remove_dc = random.choice(list(self.passive_replicas))
+        add_dc = remove_dc
+
+        return remove_dc, add_dc
 
     def get_client_locations(self):
         client_locations = {}
@@ -820,8 +903,8 @@ class NetworkEnvironment:
         prefix = "0" if self.time_of_day < 10 else ""
         plt.title(f"Network Visualization at Time of Day: {prefix}{self.time_of_day}:00"
                   f" with average latency of {self.current_latency:.2f} and \n"
-                  f"reconfiguration costs of {self.penalty_state:.2f} \n"
-                  f"and penalties of {self.penalty_tracker}", fontsize=14)  # Larger title font
+                  f"active reconfiguration costs of {self._active_penalty_state:.2f} \n"
+                  f"and penalties of {self.active_penalty_tracker}", fontsize=14)  # Larger title font
         plt.legend(fontsize=12)  # Larger legend font
 
         if return_fig:
