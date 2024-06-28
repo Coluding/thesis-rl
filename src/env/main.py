@@ -44,7 +44,7 @@ def use_custom():
     import time
     clusters = [5, 5, 5]
     device = "cpu"
-    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="rgb_array",
+    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="human",
                                  render_type="2d", device=device)
     swap_active = SwapGNN(4, 4, 64, 128, num_nodes=15,
                           for_active=True, num_locations=sum(clusters), device=device)
@@ -58,9 +58,9 @@ def use_custom():
                                    for_active=False, num_locations=sum(clusters), device=device)
 
     ppo_config = SwapPPOAgentConfigActionTypeBoth(swap_active, critic_active, swap_passive, critic_passive,
-                                                  batch_size=8)
+                                                  batch_size=8, chkpt_dir="../algorithm/logs/models/tmp/ppo")
     agent = PPOAgentActionTypeBoth(ppo_config)
-
+    agent.load_models()
     env = NetworkEnvGym(config)
     env = TorchGraphNetworkxWrapper(env, one_hot=False)
     env_extended = StackStatesTemporal(env, 4)
@@ -107,12 +107,12 @@ def use_custom():
         #state, reward, done, _, _ = env_extended.step(action)
         agent.add_experience(state, torch.stack([baseline_active, baseline_passive]), action, reward, done,
                              torch.stack([log_prob_active, log_prob_passive]))
-        #env.render()
+        env.render()
         video.capture_frame()
         print(f"Reward: {reward}")
         if i == 10:
             agent.learn()
-        #time.sleep(1)
+        time.sleep(4)
         if i == 25:
             break
         i += 1

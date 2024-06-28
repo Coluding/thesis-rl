@@ -1,9 +1,10 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric.data
+from torch_geometric.data import Data, Batch
 from torch_geometric.nn import GCNConv, global_mean_pool, GAT, GATConv, GlobalAttention, Linear
 import torch
-from typing import Sequence
+from typing import Sequence, Union
 from dataclasses import dataclass
 import numpy as np
 
@@ -19,6 +20,13 @@ class ActorGNNOutput:
     x: torch.Tensor
     pooled_x: torch.Tensor
     pa: torch.Tensor
+
+@dataclass
+class SwapGNNOutput:
+    logits: torch.Tensor
+    actions: torch.Tensor
+    log_probs: torch.Tensor
+
 
 
 class CriticGCNN(nn.Module):
@@ -165,7 +173,10 @@ class SwapGNN(nn.Module):
                  activation=nn.ReLU,
                  num_nodes: int = None,
                  num_locations: int = 15,
-                 for_active: bool = True
+                 for_active: bool = True,
+                 device: str = "cuda",
+                 lr: float = 3e-4,
+                 optimizer: nn.Module = torch.optim.Adam,
                  ):
         super(SwapGNN, self).__init__()
         self.num_nodes = num_nodes
@@ -174,7 +185,7 @@ class SwapGNN(nn.Module):
         out_dim = 1
         self.type_embedding = nn.Embedding(4, feature_dim_node)
         self.activation = activation()
-        self.att = GATConv(feature_dim_node + 1, hidden_channels//num_heads, heads=num_heads)
+        self.att = GATConv(feature_dim_node + 2, hidden_channels//num_heads, heads=num_heads)
         self.hidden_atts = nn.ModuleList()
         for _ in range(num_gat_layers - 2):
             self.hidden_atts.append(GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads))
@@ -194,8 +205,11 @@ class SwapGNN(nn.Module):
 
         self.hidden_state_projector = nn.Linear(hidden_channels, hidden_channels)
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.optimizer = optimizer(self.parameters(), lr=lr)
+
+        self.device = device
         self.to(self.device)
+
 
     def _compute_conv_output_dim(self, input_shape: Sequence[int]):
         x = torch.rand(input_shape).unsqueeze(0)
@@ -209,17 +223,18 @@ class SwapGNN(nn.Module):
         return torch.prod(torch.tensor(x.shape)).item()
 
     def forward(self, data: torch_geometric.data.Data,
-                batch: torch.Tensor = None,):
+                batch: torch.Tensor = None,) -> SwapGNNOutput:
         #x, edge_index = data.x, data.edge_index
         if len(data.type.shape) > 2:
             raise ValueError("Type should be a 1D tensor. Be sure it is not one hot encoded.")
         x = self.type_embedding(data.type.long())
+        time_index = data.update_step.unsqueeze(1).to(self.device)
         # normalize the requests
         mean_requests = torch.mean(data.requests[self.num_locations:], dim=0)
         std_requests = torch.std(data.requests[self.num_locations:], dim=0)
         requests_norm = (data.requests[self.num_locations:] - mean_requests) / std_requests
         requests_final = torch.cat([data.requests[:self.num_locations], requests_norm], dim=0)
-        x = torch.cat([x, requests_final.unsqueeze(1)], dim=-1)
+        x = torch.cat([x, requests_final.unsqueeze(1), time_index], dim=-1)
         edge_index = data.edge_index
         x = self.att(x, edge_index)
         x = self.activation(x)
@@ -231,35 +246,79 @@ class SwapGNN(nn.Module):
         x = self.first_mlp(h_l1)
         for mlp in self.mlps:
             x = mlp(x)
+        if batch is not None:
+            logits_list = []
+            actions_list = []
+            log_probs_list = []
 
-        # It should be possible that removed facility is the same as the new facility, then no movement is done
-        mask = data.active_mask if self.for_active else data.passive_mask
-        remove_mask = mask.clone()
-        remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -np.inf
-        remove_mask[:self.num_locations][mask[:self.num_locations] == -np.inf] = 0
+            unique_batches = data.batch.unique()
 
-        removed_facility_logits = self.final_mlp(x)
-        removed_facility_logits = removed_facility_logits.squeeze() + remove_mask
-        pi1 = torch.distributions.Categorical(logits=removed_facility_logits.squeeze())
-        action1 = pi1.sample()
+            for graph_idx in unique_batches:
+                action_mask = data.active_mask[data.batch == graph_idx] if self.for_active else data.passive_mask[
+                    data.batch == graph_idx]
+                mask = action_mask.clone()
+                remove_mask = mask.clone()
+                remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -float('inf')
+                remove_mask[:self.num_locations][mask[:self.num_locations] == -float('inf')] = 0
 
-        # TODO: maybe add a mask for the new facility, such that the model cannot select a facility that
-        #  was not passive before
+                removed_facility_logits = self.final_mlp(x[data.batch == graph_idx])
+                removed_facility_logits = removed_facility_logits.squeeze() + remove_mask
+                #TODO: passive mask error: everything is inf??? agent.learn() line 196
+                pi1 = torch.distributions.Categorical(logits=removed_facility_logits.squeeze())
+                action1 = pi1.sample()
 
-        # Remove the action1 facility from the mask so that we allow for no reconfiguration
-        # In essence, this allows the model to select the same node for removing and selecting which is a no-op
-        mask[action1] = 0
-        new_facility_logits = h_l1 @ nn.Tanh()(
-            self.hidden_state_projector(h_l1[action1]).unsqueeze(0)).transpose(-2, -1)
-        new_facility_logits = new_facility_logits.squeeze() + mask
-        pi2 = torch.distributions.Categorical(logits=new_facility_logits.squeeze())
-        action2 = pi2.sample()
+                mask[action1] = 0
+                new_facility_logits = h_l1[data.batch == graph_idx] @ nn.Tanh()(
+                    self.hidden_state_projector(h_l1[data.batch == graph_idx][action1]).unsqueeze(0)).transpose(-2, -1)
+                new_facility_logits = new_facility_logits.squeeze() + mask
+                pi2 = torch.distributions.Categorical(logits=new_facility_logits.squeeze())
+                action2 = pi2.sample()
 
-        logits = torch.stack([removed_facility_logits, new_facility_logits]).squeeze()
-        actions = torch.stack([action1, action2],)
+                log_probs = torch.stack([pi1.log_prob(action1), pi2.log_prob(action2)])
+                logits = torch.stack([removed_facility_logits, new_facility_logits]).squeeze()
+                actions = torch.stack([action1, action2])
+
+                logits_list.append(logits)
+                actions_list.append(actions)
+                log_probs_list.append(log_probs)
+
+            logits = torch.stack(logits_list)
+            actions = torch.stack(actions_list)
+            log_probs = torch.stack(log_probs_list)
+        else:
+            # It should be possible that removed facility is the same as the new facility, then no movement is done
+            action_mask = data.active_mask if self.for_active else data.passive_mask
+
+            #We need to clone the mask to avoid changing the original mask
+            mask = action_mask.clone()
+
+            remove_mask = mask.clone()
+            remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -np.inf
+            remove_mask[:self.num_locations][mask[:self.num_locations] == -np.inf] = 0
+
+            removed_facility_logits = self.final_mlp(x)
+            removed_facility_logits = removed_facility_logits.squeeze() + remove_mask
+            pi1 = torch.distributions.Categorical(logits=removed_facility_logits.squeeze())
+            action1 = pi1.sample()
+
+            # TODO: maybe add a mask for the new facility, such that the model cannot select a facility that
+            #  was not passive before
+
+            # Remove the action1 facility from the mask so that we allow for no reconfiguration
+            # In essence, this allows the model to select the same node for removing and selecting which is a no-op
+            mask[action1] = 0
+            new_facility_logits = h_l1 @ nn.Tanh()(
+                self.hidden_state_projector(h_l1[action1]).unsqueeze(0)).transpose(-2, -1)
+            new_facility_logits = new_facility_logits.squeeze() + mask
+            pi2 = torch.distributions.Categorical(logits=new_facility_logits.squeeze())
+            action2 = pi2.sample()
+
+            log_probs = torch.stack([pi1.log_prob(action1), pi2.log_prob(action2)])
+            logits = torch.stack([removed_facility_logits, new_facility_logits]).squeeze()
+            actions = torch.stack([action1, action2],)
 
         # Return action can be read as follows: Remove facility at index action1 and add facility at index action2
-        return logits, actions
+        return SwapGNNOutput(logits, actions, log_probs)
 
     @staticmethod
     def create_batch_tensor(nodes_per_graph, total_nodes):
@@ -285,7 +344,10 @@ class CriticSwapGNN(nn.Module):
                  activation=nn.ReLU,
                  num_nodes: int = None,
                  num_locations: int = 15,
-                 for_active: bool = True
+                 for_active: bool = True,
+                 device: str = "cuda",
+                 optimizer: nn.Module = torch.optim.Adam,
+                 lr: float = 3e-4,
                  ):
         super(CriticSwapGNN, self).__init__()
         self.num_nodes = num_nodes
@@ -294,7 +356,7 @@ class CriticSwapGNN(nn.Module):
         out_dim = 1
         self.type_embedding = nn.Embedding(4, feature_dim_node)
         self.activation = activation()
-        self.att = GATConv(feature_dim_node + 1, hidden_channels//num_heads, heads=num_heads)
+        self.att = GATConv(feature_dim_node + 2, hidden_channels//num_heads, heads=num_heads)
         self.hidden_atts = nn.ModuleList()
         for _ in range(num_gat_layers - 2):
             self.hidden_atts.append(GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads))
@@ -305,26 +367,29 @@ class CriticSwapGNN(nn.Module):
             critic_layer.append(Linear(hidden_channels, hidden_channels))
             critic_layer.append(activation())
 
-        critic_layer.append(Linear(hidden_channels, 2))
+        critic_layer.append(Linear(hidden_channels, 1))
         self.critic = nn.Sequential(*critic_layer)
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.optimizer = optimizer(self.parameters(), lr=lr)
+
+        self.device = device
         self.to(self.device)
 
-    def forward(self, data: torch_geometric.data.Data,
-                batch: torch.Tensor = None,):
-
+    def forward(self, data: Union[Data, Batch], batch: torch.Tensor = None):
         if len(data.type.shape) > 2:
-            raise ValueError("Type should be a 1D tensor. Be sure it is not one hot encoded.")
+            raise ValueError("Type should be a 1D tensor. Be sure it is not one-hot encoded.")
 
         x = self.type_embedding(data.type.long())
-        # normalize the requests
+        time_index = data.update_step.unsqueeze(1).to(self.device)
+        # Normalize the requests
         mean_requests = torch.mean(data.requests[self.num_locations:], dim=0)
         std_requests = torch.std(data.requests[self.num_locations:], dim=0)
-        requests_norm = (data.requests[self.num_locations:] - mean_requests) / std_requests
+        requests_norm = (data.requests[self.num_locations:] - mean_requests) / (std_requests + 1e-6)
         requests_final = torch.cat([data.requests[:self.num_locations], requests_norm], dim=0)
-        x = torch.cat([x, requests_final.unsqueeze(1)], dim=-1)
+
+        x = torch.cat([x, requests_final.unsqueeze(1), time_index], dim=-1)
         edge_index = data.edge_index
+
         x = self.att(x, edge_index)
         x = self.activation(x)
         for att in self.hidden_atts:
@@ -332,9 +397,13 @@ class CriticSwapGNN(nn.Module):
             x = self.activation(x)
         x = self.final_att(x, edge_index)
 
-        baseline_value = self.critic(x)
+        # Node values
+        node_values = self.critic(x)
 
-        return baseline_value
+        # Apply global mean pooling to get a graph-level embedding
+        graph_value = global_mean_pool(node_values, batch)
+
+        return graph_value
 
 
 

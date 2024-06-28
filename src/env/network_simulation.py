@@ -596,8 +596,6 @@ class NetworkEnvironment:
         self.time_of_day = (self.time_of_day + 1) % 24
         self.fluctuate_latencies()
 
-        state = self.graph
-
         done = False
         if self.global_step >= self.period_length:
             done = True
@@ -607,7 +605,7 @@ class NetworkEnvironment:
 
         self.global_step += 1
 
-        return state, reward, done
+        return self.graph, reward, done
 
     def _get_active_and_passive_reward(self):
         active_reward = self.penalty_weights.LatencyPenalty * (-self.current_latency) - self._active_penalty_state
