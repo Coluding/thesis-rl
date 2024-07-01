@@ -248,6 +248,12 @@ class NetworkEnvironment:
 
         self.str_to_region = {loc.region.value: loc for loc in self.region_objects}
 
+    def random_action(self):
+        passive_action = (random.choice(list(self.passive_replicas)), random.choice(list(self.available_passive_replicas)))
+        active_action = (random.choice(list(self.active_replicas)), random.choice(list(self.available_active_replicas)))
+
+        return active_action, passive_action
+
     def _add_mask_to_graph(self):
         for node in self.graph.nodes:
             if node in self.available_active_replicas:
@@ -577,7 +583,8 @@ class NetworkEnvironment:
     def step(self, action: Optional[Union[Tuple[str, str], Tuple[Tuple[str, str], Tuple[str, str]]]] = None):
         self._active_penalty_state = 0
         self._passive_penalty_state = 0
-        self.penalty_tracker = []
+        self.active_penalty_tracker = []
+        self.passive_penalty_tracker = []
         self.simulate_client_movements()
         self._distribute_requests()
 
@@ -917,7 +924,7 @@ def main():
     clusters = [5, 5, 5]  # Europe, Asia, USA
     num_clients = 30
 
-    env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients)
+    env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients, k=1,)
     intial_dcs = list(env.active_replicas)
     print(f"Initial active data centers: {intial_dcs}")
     initial_passive_dcs = list(env.passive_replicas)

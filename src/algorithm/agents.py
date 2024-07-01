@@ -6,7 +6,6 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from typing import Tuple, Optional
-from tensordict import TensorDict
 import torch_geometric
 from tqdm import tqdm
 from typing import List

@@ -15,6 +15,7 @@ from src.env.env import (IntervalResult,
 
 from src.algorithm.agents import SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth, PPOAgentActionTypeBoth
 from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN
+from src.model.temporal_gnn import SemiTemporalSwapGNN
 
 def use_java():
     critic = CriticGCNN(4, 48, 24, 128, num_nodes=15)
@@ -41,11 +42,32 @@ def use_java():
         video.close()
 
 def use_custom():
+    from src.env.network_simulation import PenaltyWeights
     import time
     clusters = [5, 5, 5]
     device = "cpu"
+
+    penalty_weights = PenaltyWeights(
+        LatencyPenalty=1,
+        ReconfigurationPenalty=0.001,
+        PassiveCost=0.001,
+        ActiveCost=0.001,
+        WrongActivePenalty=0.001,
+        WrongPassivePenalty=0.001,
+        WrongActiveAfterPassivePenalty=0.001,
+        WrongNumberPassivePenalty=0.001,
+        ActiveNodeAlsoPassivePenalty=0.001,
+        ReExplorationPassiveWeight=1,
+        EdgeDifferenceWeight=1,
+        NewEdgesDiscoveredReward=1,
+    )
+
     config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="human",
-                                 render_type="2d", device=device)
+                                 render_type="2d", device=device, penalty_weights=penalty_weights,num_active=1)
+
+    temp_gnn = SemiTemporalSwapGNN(4, 4, 64, 128, num_nodes=15,
+                          for_active=True, num_locations=sum(clusters), device=device)
+
     swap_active = SwapGNN(4, 4, 64, 128, num_nodes=15,
                           for_active=True, num_locations=sum(clusters), device=device)
     swap_passive = SwapGNN(4, 4, 64, 128, num_nodes=15,
@@ -60,7 +82,7 @@ def use_custom():
     ppo_config = SwapPPOAgentConfigActionTypeBoth(swap_active, critic_active, swap_passive, critic_passive,
                                                   batch_size=8, chkpt_dir="../algorithm/logs/models/tmp/ppo")
     agent = PPOAgentActionTypeBoth(ppo_config)
-    agent.load_models()
+  #  agent.load_models()
     env = NetworkEnvGym(config)
     env = TorchGraphNetworkxWrapper(env, one_hot=False)
     env_extended = StackStatesTemporal(env, 4)
@@ -68,6 +90,11 @@ def use_custom():
     state, _ = env.reset()
     action = (env.env.env.no_op_active(), env.env.env.no_op_passive())
     state, reward, done, _, _ = env.step(action)
+
+    temp_state = env_extended.step(action)
+    temp_gnn(temp_state[0])
+    #for i in range(10):
+     #   state, reward, done, _, _ = env_extended.step(action)
     done = False
     i = 0
     europes = {"europe_dc_1", "europe_dc_2", "europe_dc_3"}

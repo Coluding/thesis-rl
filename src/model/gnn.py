@@ -236,12 +236,12 @@ class SwapGNN(nn.Module):
         requests_final = torch.cat([data.requests[:self.num_locations], requests_norm], dim=0)
         x = torch.cat([x, requests_final.unsqueeze(1), time_index], dim=-1)
         edge_index = data.edge_index
-        x = self.att(x, edge_index)
+        x = self.att(x, edge_index, edge_attr=data.latency)
         x = self.activation(x)
         for att in self.hidden_atts:
-            x = att(x, edge_index)
+            x = att(x, edge_index, edge_attr=data.latency)
             x = self.activation(x)
-        h_l1 = self.final_att(x, edge_index)
+        h_l1 = self.final_att(x, edge_index, edge_attr=data.latency)
 
         x = self.first_mlp(h_l1)
         for mlp in self.mlps:
@@ -390,12 +390,12 @@ class CriticSwapGNN(nn.Module):
         x = torch.cat([x, requests_final.unsqueeze(1), time_index], dim=-1)
         edge_index = data.edge_index
 
-        x = self.att(x, edge_index)
+        x = self.att(x, edge_index, edge_attr=data.latency)
         x = self.activation(x)
         for att in self.hidden_atts:
-            x = att(x, edge_index)
+            x = att(x, edge_index, edge_attr=data.latency)
             x = self.activation(x)
-        x = self.final_att(x, edge_index)
+        x = self.final_att(x, edge_index, edge_attr=data.latency)
 
         # Node values
         node_values = self.critic(x)
@@ -406,4 +406,44 @@ class CriticSwapGNN(nn.Module):
         return graph_value
 
 
+class QNetworkSwapGNN:
+    def __init__(self, feature_dim_node: int = 3,
+                 out_channels: int = 24,
+                 hidden_channels: int = 12,
+                 fc_hidden_dim: int = 128,
+                 num_gat_layers: int = 4,
+                 num_mlp_layers:int = 3,
+                 num_heads=4,
+                 activation=nn.ReLU,
+                 num_nodes: int = None,
+                 num_locations: int = 15,
+                 for_active: bool = True,
+                 device: str = "cuda",
+                 optimizer: nn.Module = torch.optim.Adam,
+                 lr: float = 3e-4,
+                 ):
+        super(QNetworkSwapGNN, self).__init__()
+        self.num_nodes = num_nodes
+        self.for_active = for_active
+        self.num_locations = num_locations
+        out_dim = 1
+        self.type_embedding = nn.Embedding(4, feature_dim_node)
+        self.activation = activation()
+        self.att = GATConv(feature_dim_node + 2, hidden_channels//num_heads, heads=num_heads)
+        self.hidden_atts = nn.ModuleList()
+        for _ in range(num_gat_layers - 2):
+            self.hidden_atts.append(GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads))
+        self.final_att = GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads)
 
+        critic_layer = []
+        for _ in range(num_mlp_layers):
+            critic_layer.append(Linear(hidden_channels, hidden_channels))
+            critic_layer.append(activation())
+
+        critic_layer.append(Linear(hidden_channels, 1))
+        self.critic = nn.Sequential(*critic_layer)
+
+        self.optimizer = optimizer(self.parameters(), lr=lr)
+
+        self.device = device
+        self.to(self.device)

@@ -191,7 +191,7 @@ class RepStateMachineTrainerRL:
 
 def main():
     device = "cuda"
-    clusters = [5, 5, 5]
+    clusters = [2, 2, 2]
 
     penalty_weights = PenaltyWeights(
         LatencyPenalty = 1,
@@ -208,12 +208,14 @@ def main():
         NewEdgesDiscoveredReward=1,
     )
 
-    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="rgb_array",
-                                 render_type="2d", device=device)
+    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=5, render_mode="human",
+                                 render_type="2d", device=device, penalty_weights=penalty_weights, num_active=1)
+
+    # num gat_layers should be max 2 since the longest path is 2 and mor elayers would not add more information
     swap_active = SwapGNN(4, 4, 64, 128, num_nodes=15,
-                          num_gat_layers=3, for_active=True, num_locations=sum(clusters), device=device)
+                          num_gat_layers=2, for_active=True, num_locations=sum(clusters), device=device)
     swap_passive = SwapGNN(4, 4, 64, 128, num_nodes=15,
-                          num_gat_layers=3, for_active=False, num_locations=sum(clusters), device=device)
+                          num_gat_layers=2, for_active=False, num_locations=sum(clusters), device=device)
 
     critic_active = CriticSwapGNN(4, 4, 64, 128, num_nodes=15,
                           num_gat_layers=3, for_active=True, num_locations=sum(clusters), device=device)
@@ -229,7 +231,7 @@ def main():
     env = NetworkEnvGym(config)
     env = TorchGraphNetworkxWrapper(env, one_hot=False)
 
-    training_args = TrainingParams(train_steps=500)
+    training_args = TrainingParams(train_steps=3000)
 
     trainer_config = RepStateMachineTrainerConfig(agent=agent, env=env, training_params=training_args, day_periods=1000,
                                                   training_algorithm=TrainingAlgorithms.PPO)

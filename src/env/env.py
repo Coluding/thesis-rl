@@ -1,5 +1,5 @@
 from typing import Union, List, Tuple, Dict, Optional, Any
-
+from torch_geometric_temporal.signal import DynamicGraphTemporalSignal
 import matplotlib.figure
 import matplotlib.pyplot as plt
 import gym
@@ -500,6 +500,8 @@ class TorchGraphNetworkxWrapper(gym.ObservationWrapper):
         torch_graph.type = torch_graph.type.to(torch.float32).to(self.device)
         torch_graph.requests = torch_graph.requests.to(torch.float32).to(self.device)
         torch_graph.edge_index = torch_graph.edge_index.to(self.device)
+        torch_graph.update_step = torch_graph.update_step.to(self.device)
+        torch_graph.latency = torch_graph.latency.to(self.device)
 
         return torch_graph
 
@@ -522,40 +524,31 @@ class StackStatesTemporal(gym.ObservationWrapper):
         self.stack = deque(maxlen=num_states)
         self._initialize_stack()
 
-    def add_temporal_edges(self, graphs: List[Data]) -> torch.Tensor:
-        num_nodes = graphs[0].num_nodes
-        temporal_edges = []
-
-        for t in range(len(graphs) - 1):
-            for i in range(num_nodes):
-                temporal_edges.append([i + t * num_nodes, i + (t + 1) * num_nodes])
-
-        return torch.tensor(temporal_edges).t().contiguous().to(graphs[0].requests.device)
-
     def _initialize_stack(self):
         if len(self.stack) == 0:
             reset_state, _ = self.env.reset()
             for _ in range(self.num_states):
                 self.stack.append(reset_state)
 
-    def merge_graphs(self, graphs: List[Data], temporal_edges: torch.Tensor) -> Data:
-        requests = torch.cat([graph.requests for graph in graphs], dim=0)
-        edge_index = torch.cat([graph.edge_index + i * graph.num_nodes for i, graph in enumerate(graphs)], dim=1)
-        # edge_index = torch.cat([edge_index, temporal_edges], dim=1)
-        active_mask = torch.cat([graph.active_mask for graph in graphs], dim=0)
-        passive_mask = torch.cat([graph.passive_mask for graph in graphs], dim=0)
-        types = torch.cat([graph.type for graph in graphs], dim=0)
-
-        merged_graph = TemporalData(type=types, edge_index=edge_index, requests=requests, active_mask=active_mask,
-                                    passive_mask=passive_mask, t=torch.arange(self.num_states))
-
-        return merged_graph
-
     def observation(self, observation: Data) -> Data:
         self.stack.append(observation)
         graphs = list(self.stack)
 
-        temporal_edges = self.add_temporal_edges(graphs)
-        combined_graph = self.merge_graphs(graphs, temporal_edges)
+        node_features = [[graph.type.cpu().numpy(), graph.requests.cpu().numpy(), graph.update_step.cpu().numpy()]
+                         for graph in graphs]
+        edge_indices = ([graph.edge_index for graph in graphs])
+        latencies = ([graph.latency.cpu().numpy() for graph in graphs])
+        targets = [np.array((i)) for i in range(len(graphs))]
+        active_mask = [graph.active_mask.cpu().numpy() for graph in graphs]
+        passive_mask = [graph.passive_mask.cpu().numpy() for graph in graphs]
 
-        return combined_graph
+        temporal_graph = DynamicGraphTemporalSignal(
+            features=node_features,
+            edge_indices=edge_indices,
+            edge_weights=latencies,
+            targets=targets,
+            active_mask=active_mask,
+            passive_mask=passive_mask
+        )
+
+        return temporal_graph

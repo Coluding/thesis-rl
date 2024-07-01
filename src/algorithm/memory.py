@@ -1,8 +1,5 @@
-from torchrl.trainers.helpers.collectors import SyncDataCollector
-from torchrl.data.replay_buffers import ReplayBuffer, LazyTensorStorage, SamplerWithoutReplacement
-import torch
 from torch import Tensor
-from tensordict import TensorDict
+import torch
 import numpy as np
 from typing import Union, Sequence, Any
 from torch_geometric.data import Data, Batch
