@@ -257,7 +257,8 @@ def main():
 
     ppo_config = SwapPPOAgentConfigActionTypeBoth(swap_active, critic_active, swap_passive, critic_passive,
                                                   batch_size=32, n_epochs=2,
-                                                  summary_writer=SummaryWriter(log_dir="logs/tensorboard"))
+                                                  summary_writer=SummaryWriter(log_dir="logs/tensorboard"),
+                                                  lr=0.001)
     agent = PPOAgentActionTypeBoth(ppo_config)
 
     env = NetworkEnvGym(config)

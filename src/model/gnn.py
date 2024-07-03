@@ -424,7 +424,9 @@ class TransformerGNN(nn.Module):
                  dropout_rate: float = 0.,
                  top_k_ratio: float = 0.1,
                  dense_neurons: int = 128,
-                 edge_dim: int = 1):
+                 edge_dim: int = 1,
+                 lr: float = 0.0001,
+                 optimizer: nn.Module = torch.optim.Adam):
 
         super().__init__()
         self.top_k_every_n = top_k_every_n
@@ -458,6 +460,11 @@ class TransformerGNN(nn.Module):
         self.linear1 = Linear(embedding_size, dense_neurons)
         self.linear2 = Linear(dense_neurons, int(dense_neurons / 2))
         self.linear3 = Linear(int(dense_neurons / 2), 1)
+
+        self.optimizer = optimizer(self.parameters(), lr=lr)
+
+        self.device = device
+        self.to(self.device)
 
         self.device = device
         self.to(self.device)
@@ -513,7 +520,10 @@ class TransformerSwapGNN(nn.Module):
                  dense_neurons: int = 128,
                  edge_dim: int = 1,
                  num_locations: int = 15,
-                 for_active: bool = True):
+                 for_active: bool = True,
+                 lr: float = 0.0001,
+                 optimizer: nn.Module = torch.optim.Adam
+                 ):
 
         super().__init__()
         self.num_locations = 15
@@ -548,6 +558,8 @@ class TransformerSwapGNN(nn.Module):
 
         self.remove_facility_layer = Linear(dense_neurons // 2, 1)
         self.add_facility_projector = Linear(dense_neurons // 2, dense_neurons // 2)
+
+        self.optimizer = optimizer(self.parameters(), lr=lr)
 
         self.device = device
         self.to(self.device)
