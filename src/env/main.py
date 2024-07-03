@@ -14,7 +14,7 @@ from src.env.env import (IntervalResult,
                          StackStatesTemporal)
 
 from src.algorithm.agents import SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth, PPOAgentActionTypeBoth
-from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN
+from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN
 from src.model.temporal_gnn import SemiTemporalSwapGNN
 
 def use_java():
@@ -70,6 +70,15 @@ def use_custom():
 
     swap_active = SwapGNN(4, 4, 64, 128, num_nodes=15,
                           for_active=True, num_locations=sum(clusters), device=device)
+    swap_active = TransformerSwapGNN(n_layers=4,
+                                     feature_size=2,
+                                     n_heads=3,
+                                     embedding_size=64,
+                                     dropout_rate=0.2,
+                                     top_k_ratio=0.5,
+                                     dense_neurons=256,
+                                     device="cpu"
+                           )
     swap_passive = SwapGNN(4, 4, 64, 128, num_nodes=15,
                            for_active=False, num_locations=sum(clusters), device=device)
 

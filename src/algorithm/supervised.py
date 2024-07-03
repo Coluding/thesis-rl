@@ -139,7 +139,7 @@ def construct_samples_and_train(traj_length: int = 50000,
                                 num_epochs: int = 20,
                                 learning_rate: float = 3e-4):
     # Initialize the model, optimizer, and loss function
-    device = "cpu"
+    device = "cuda"
     model = CriticSwapGNN(device=device,
                           feature_dim_node=16,
                           hidden_channels=64,
@@ -174,11 +174,13 @@ def construct_samples_and_train(traj_length: int = 50000,
         EdgeDifferenceWeight=1,
         NewEdgesDiscoveredReward=1,
     )
-    env = NetworkEnvironment(num_centers=3, k=1, clusters=[5,5, 5], num_clients=20, penalty_weights=penalty_weights,
+    env = NetworkEnvironment(num_centers=3, k=3, clusters=[5,5, 5],
+                             num_clients=20,
+                             #penalty_weights=penalty_weights,
                              period_length=1000000)
 
     obs_wrapper = TorchGraphWrapper()
-    best_loss = -torch.inf
+    best_loss = torch.inf
 
     for n in range(num_trajectories):
         trajectory = []

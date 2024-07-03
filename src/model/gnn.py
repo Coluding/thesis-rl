@@ -266,7 +266,6 @@ class SwapGNN(nn.Module):
 
                 removed_facility_logits = self.final_mlp(x[data.batch == graph_idx])
                 removed_facility_logits = removed_facility_logits.squeeze() + remove_mask
-                #TODO: passive mask error: everything is inf??? agent.learn() line 196
                 pi1 = torch.distributions.Categorical(logits=removed_facility_logits.squeeze())
                 action1 = pi1.sample()
 
@@ -463,11 +462,11 @@ class TransformerGNN(nn.Module):
         self.device = device
         self.to(self.device)
 
-    def forward(self, data, batch_index):
+    def forward(self, data, batch_index=None):
         # Initial transformation
         x = torch.cat([data.type.unsqueeze(1), data.requests.unsqueeze(1)], dim=1)
         edge_index = data.edge_index
-        edge_attr = data.latency.unsqueeze(1)
+        edge_attr = data.latency.unsqueeze(1).to(torch.float)
         x = self.conv1(x, edge_index, edge_attr)
         x = torch.relu(self.transf1(x))
         x = self.bn1(x)
@@ -501,6 +500,143 @@ class TransformerGNN(nn.Module):
 
         return x
 
+
+class TransformerSwapGNN(nn.Module):
+    def __init__(self,
+                 device: str = "cuda",
+                 feature_size: int = 4,
+                 embedding_size: int = 32,
+                 n_heads: int = 4,
+                 n_layers: int = 3,
+                 dropout_rate: float = 0.,
+                 top_k_ratio: float = 0.1,
+                 dense_neurons: int = 128,
+                 edge_dim: int = 1,
+                 num_locations: int = 15,
+                 for_active: bool = True):
+
+        super().__init__()
+        self.num_locations = 15
+        self.for_active = for_active
+        self.n_layers = n_layers
+        self.conv_layers = nn.ModuleList([])
+        self.transf_layers = nn.ModuleList([])
+        self.pooling_layers = nn.ModuleList([])
+        self.bn_layers = nn.ModuleList([])
+
+        self.conv1 = TransformerConv(
+            feature_size, embedding_size, heads=n_heads, dropout=dropout_rate, edge_dim=1, beta=True
+        )
+
+        self.transf1 = Linear(embedding_size*n_heads, embedding_size)
+        self.bn1 = BatchNorm1d(embedding_size)
+
+        for i in range(self.n_layers):
+            self.conv_layers.append(TransformerConv(embedding_size,
+                                                    embedding_size,
+                                                    heads=n_heads,
+                                                    dropout=dropout_rate,
+                                                    edge_dim=edge_dim,
+                                                    beta=True))
+
+            self.transf_layers.append(Linear(embedding_size * n_heads, embedding_size))
+            self.bn_layers.append(BatchNorm1d(embedding_size))
+
+        # Linear transformation layers to prepare attention embedding for the location selection logits
+        self.linear1 = Linear(embedding_size, dense_neurons)
+        self.linear2 = Linear(dense_neurons, int(dense_neurons / 2))
+
+        self.remove_facility_layer = Linear(dense_neurons // 2, 1)
+        self.add_facility_projector = Linear(dense_neurons // 2, dense_neurons // 2)
+
+        self.device = device
+        self.to(self.device)
+
+    def forward(self, data, batch_index=None):
+        # Initial transformation
+        x = torch.cat([data.type.unsqueeze(1), data.requests.unsqueeze(1)], dim=1)
+        edge_index = data.edge_index
+        edge_attr = data.latency.unsqueeze(1).to(torch.float)
+        x = self.conv1(x, edge_index, edge_attr)
+        x = torch.relu(self.transf1(x))
+        x = self.bn1(x)
+
+        # Holds the intermediate graph representations
+        global_representation = []
+
+        for i in range(self.n_layers):
+            x = self.conv_layers[i](x, edge_index, edge_attr)
+            x = torch.relu(self.transf_layers[i](x))
+            x = self.bn_layers[i](x)
+
+        # Output block
+        x = torch.relu(self.linear1(x))
+        x = F.dropout(x, p=0.8, training=self.training)
+        x = torch.relu(self.linear2(x))
+
+        if batch_index is None:
+            action_mask = data.active_mask if self.for_active else data.passive_mask
+            mask = action_mask.clone()
+            remove_mask = mask.clone()
+            remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -np.inf
+            remove_mask[:self.num_locations][mask[:self.num_locations] == -np.inf] = 0
+
+            removed_facility_logits = self.remove_facility_layer(x)
+            removed_facility_logits = removed_facility_logits.squeeze() + remove_mask
+            pi1 = torch.distributions.Categorical(logits=removed_facility_logits.squeeze())
+            action1 = pi1.sample()
+
+            mask[action1] = 0
+            # the idea is here that the dot product uses the embedding of the removed facility to select the new one
+            new_facility_logits = x @ nn.Tanh()(self.add_facility_projector(x[action1]).unsqueeze(0)).transpose(-2, -1)
+            new_facility_logits = new_facility_logits.squeeze() + mask
+            pi2 = torch.distributions.Categorical(logits=new_facility_logits.squeeze())
+            action2 = pi2.sample()
+
+            log_probs = torch.stack([pi1.log_prob(action1), pi2.log_prob(action2)])
+            logits = torch.stack([removed_facility_logits, new_facility_logits]).squeeze()
+            actions = torch.stack([action1, action2])
+
+        else:
+            logits_list = []
+            actions_list = []
+            log_probs_list = []
+
+            unique_batches = batch_index.unique()
+
+            for graph_idx in unique_batches:
+                action_mask = data.active_mask[data.batch == graph_idx] if self.for_active else data.passive_mask[
+                    data.batch == graph_idx]
+                mask = action_mask.clone()
+                remove_mask = mask.clone()
+                remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -float('inf')
+                remove_mask[:self.num_locations][mask[:self.num_locations] == -float('inf')] = 0
+
+                removed_facility_logits = self.remove_facility_layer(x[data.batch == graph_idx])
+                removed_facility_logits = removed_facility_logits.squeeze() + remove_mask
+                pi1 = torch.distributions.Categorical(logits=removed_facility_logits.squeeze())
+                action1 = pi1.sample()
+
+                mask[action1] = 0
+                new_facility_logits = x[data.batch == graph_idx] @ nn.Tanh()(
+                    self.add_facility_projector(x[data.batch == graph_idx][action1]).unsqueeze(0)).transpose(-2, -1)
+                new_facility_logits = new_facility_logits.squeeze() + mask
+                pi2 = torch.distributions.Categorical(logits=new_facility_logits.squeeze())
+                action2 = pi2.sample()
+
+                log_probs = torch.stack([pi1.log_prob(action1), pi2.log_prob(action2)])
+                logits = torch.stack([removed_facility_logits, new_facility_logits]).squeeze()
+                actions = torch.stack([action1, action2])
+
+                logits_list.append(logits)
+                actions_list.append(actions)
+                log_probs_list.append(log_probs)
+
+            logits = torch.stack(logits_list)
+            actions = torch.stack(actions_list)
+            log_probs = torch.stack(log_probs_list)
+
+        return SwapGNNOutput(logits, actions, log_probs)
 
 
 class QNetworkSwapGNN:

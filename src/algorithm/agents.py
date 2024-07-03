@@ -11,7 +11,7 @@ from tqdm import tqdm
 from typing import List
 import logging
 
-from src.model.gnn import SwapGNN, CriticSwapGNN
+from src.model.gnn import SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN
 from src.algorithm.memory import OnPolicyMemory
 
 logging.basicConfig(
@@ -62,8 +62,8 @@ class AbstractAgent(ABC):
 
 @dataclass
 class SwapPPOAgentConfigActionTypeSingle:
-    actor: SwapGNN
-    critic: CriticSwapGNN
+    actor: SwapGNN | TransformerSwapGNN
+    critic: CriticSwapGNN | TransformerGNN
     gae_lambda: Optional[float] = 0.95
     clip_eps: Optional[float] = 0.2
     eps: Optional[float] = 0.2
@@ -79,10 +79,10 @@ class SwapPPOAgentConfigActionTypeSingle:
 
 @dataclass
 class SwapPPOAgentConfigActionTypeBoth:
-    active_actor: SwapGNN
-    active_critic: CriticSwapGNN
-    passive_actor: SwapGNN
-    passive_critic: CriticSwapGNN
+    active_actor: SwapGNN | TransformerSwapGNN
+    active_critic: CriticSwapGNN | TransformerGNN
+    passive_actor: SwapGNN | TransformerSwapGNN
+    passive_critic: CriticSwapGNN | TransformerGNN
     optimizer: Optional[nn.Module] = torch.optim.Adam
     lr: Optional[float] = 0.001
     entropy_reg: Optional[float] = 0.01
