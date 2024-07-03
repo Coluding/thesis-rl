@@ -789,6 +789,8 @@ class NetworkEnvironment:
 
         for client in self.clients:
             for active in self.active_replicas:
+                #total_latency += (self.get_latency(client, active) * (
+                #    self.current_request_distribution[client] / self.total_requests_per_interval))
                 total_latency += self.get_latency(client, active)
                 count += 1
 
@@ -801,12 +803,21 @@ class NetworkEnvironment:
         self.current_latency = total_latency / count if count != 0 else 0
 
     def _distribute_requests(self):
+        # adjust client weights according to their location
+        weights = np.zeros(len(self.clients))
+        for i, client in enumerate(self.clients):
+            region = self.client_regions[client]
+            peak_times = self.str_to_region[region].peak_times
+            inverted_dist = 1 / self._compute_time_distance_of_intervals(self.time_of_day,
+                                                                        (peak_times[0] + peak_times[1]) / 2)
+            weights[i] = inverted_dist
+
+        self.client_weights = weights
         requests = np.random.dirichlet(self.client_weights, 1)[0] * self.total_requests_per_interval
         request_distribution = dict(zip(self.clients, requests.astype(int)))
         for client, num_requests in request_distribution.items():
             self.graph.nodes[client]['requests'] = num_requests
         self.current_request_distribution = request_distribution
-
 
     def _compute_time_distance_of_intervals(self, x: float, timepoint: float) -> float:
         dist = min(abs(x - timepoint), abs(24 + x - timepoint))

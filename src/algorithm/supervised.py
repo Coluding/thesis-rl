@@ -7,7 +7,7 @@ from torch_geometric.data import Data, Batch, Dataset
 from torch_geometric.utils import from_networkx
 from torch.optim import Adam
 from tqdm import tqdm
-from src.model.gnn import CriticSwapGNN
+from src.model.gnn import CriticSwapGNN, TransformerGNN
 from src.env.network_simulation import NetworkEnvironment, PenaltyWeights
 
 
@@ -149,6 +149,15 @@ def construct_samples_and_train(traj_length: int = 50000,
                           num_mlp_layers=4,
                           fc_hidden_dim=64)
 
+    model = TransformerGNN(n_layers=4,
+                           feature_size=2,
+                           n_heads=3,
+                           embedding_size=64,
+                           dropout_rate=0.2,
+                           top_k_ratio=0.5,
+                           dense_neurons=256,
+                           )
+
     optimizer = Adam(model.parameters(), lr=learning_rate)
     criterion = torch.nn.MSELoss(reduction="mean")
     penalty_weights = PenaltyWeights(
@@ -191,7 +200,7 @@ def construct_samples_and_train(traj_length: int = 50000,
         dataset.normalize(targets.mean(), targets.std(), feature="target")
         data_loader = DataLoader(batch_size, dataset)
         # Set the device
-        device = "cpu"
+        device = "cuda"
         # Training loop
         num_epochs = num_epochs
         for epoch in range(num_epochs):
@@ -243,7 +252,10 @@ def save_data():
     # save samples
     torch.save(dataset, "env_dataset_samples.pt")
 
-
+#TODO: include more extreme latencies, the current distribution is peaking strongly at values around 0-300
 if __name__ == "__main__":
-    construct_samples_and_train(traj_length=5000, batch_size=16, num_trajectories=100000, num_epochs=20,
+    construct_samples_and_train(traj_length=5000,
+                                batch_size=128,
+                                num_trajectories=100000,
+                                num_epochs=20,
                                 learning_rate=0.00001)

@@ -2,7 +2,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric.data
 from torch_geometric.data import Data, Batch
-from torch_geometric.nn import GCNConv, global_mean_pool, GAT, GATConv, GlobalAttention, Linear, TransformerConv
+from torch.nn import Linear, BatchNorm1d
+from torch_geometric.nn import (
+    GCNConv, global_mean_pool, GAT, GATConv, GlobalAttention, TransformerConv, TopKPooling, global_max_pool
+)
 import torch
 from typing import Sequence, Union
 from dataclasses import dataclass
@@ -409,6 +412,95 @@ class CriticSwapGNN(nn.Module):
         graph_value = global_mean_pool(node_values, batch)
 
         return graph_value
+
+
+class TransformerGNN(nn.Module):
+    def __init__(self,
+                 device: str = "cuda",
+                 feature_size: int = 4,
+                 embedding_size: int = 32,
+                 n_heads: int = 4,
+                 n_layers: int = 3,
+                 top_k_every_n: int = 1,
+                 dropout_rate: float = 0.,
+                 top_k_ratio: float = 0.1,
+                 dense_neurons: int = 128,
+                 edge_dim: int = 1):
+
+        super().__init__()
+        self.top_k_every_n = top_k_every_n
+        self.n_layers = n_layers
+        self.conv_layers = nn.ModuleList([])
+        self.transf_layers = nn.ModuleList([])
+        self.pooling_layers = nn.ModuleList([])
+        self.bn_layers = nn.ModuleList([])
+
+        self.conv1 = TransformerConv(
+            feature_size, embedding_size, heads=n_heads, dropout=dropout_rate, edge_dim=1, beta=True
+        )
+
+        self.transf1 = Linear(embedding_size*n_heads, embedding_size)
+        self.bn1 = BatchNorm1d(embedding_size)
+
+        for i in range(self.n_layers):
+            self.conv_layers.append(TransformerConv(embedding_size,
+                                                    embedding_size,
+                                                    heads=n_heads,
+                                                    dropout=dropout_rate,
+                                                    edge_dim=edge_dim,
+                                                    beta=True))
+
+            self.transf_layers.append(Linear(embedding_size * n_heads, embedding_size))
+            self.bn_layers.append(BatchNorm1d(embedding_size))
+            if i % self.top_k_every_n == 0:
+                self.pooling_layers.append(TopKPooling(embedding_size, ratio=top_k_ratio))
+
+        # Linear layers
+        self.linear1 = Linear(embedding_size, dense_neurons)
+        self.linear2 = Linear(dense_neurons, int(dense_neurons / 2))
+        self.linear3 = Linear(int(dense_neurons / 2), 1)
+
+        self.device = device
+        self.to(self.device)
+
+    def forward(self, data, batch_index):
+        # Initial transformation
+        x = torch.cat([data.type.unsqueeze(1), data.requests.unsqueeze(1)], dim=1)
+        edge_index = data.edge_index
+        edge_attr = data.latency.unsqueeze(1)
+        x = self.conv1(x, edge_index, edge_attr)
+        x = torch.relu(self.transf1(x))
+        x = self.bn1(x)
+
+        # Holds the intermediate graph representations
+        global_representation = []
+
+        for i in range(self.n_layers):
+            x = self.conv_layers[i](x, edge_index, edge_attr)
+            x = torch.relu(self.transf_layers[i](x))
+            x = self.bn_layers[i](x)
+            # Always aggregate last layer
+            if i % self.top_k_every_n == 0 or i == self.n_layers:
+                x, edge_index, edge_attr, batch_index, _, _ = self.pooling_layers[int(i / self.top_k_every_n)](
+                    x, edge_index, edge_attr, batch_index
+                )
+                # Add current representation
+                #global_representation.append(torch.cat([global_max_pool(x, batch_index),
+                #                                        global_mean_pool(x, batch_index)], dim=1))
+
+                global_representation.append(global_mean_pool(x, batch_index))
+
+        x = sum(global_representation)
+
+        # Output block
+        x = torch.relu(self.linear1(x))
+        x = F.dropout(x, p=0.8, training=self.training)
+        x = torch.relu(self.linear2(x))
+        x = F.dropout(x, p=0.8, training=self.training)
+        x = self.linear3(x)
+
+        return x
+
 
 
 class QNetworkSwapGNN:
