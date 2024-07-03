@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric.data
 from torch_geometric.data import Data, Batch
-from torch_geometric.nn import GCNConv, global_mean_pool, GAT, GATConv, GlobalAttention, Linear
+from torch_geometric.nn import GCNConv, global_mean_pool, GAT, GATConv, GlobalAttention, Linear, TransformerConv
 import torch
 from typing import Sequence, Union
 from dataclasses import dataclass
@@ -334,8 +334,8 @@ class SwapGNN(nn.Module):
 
 
 class CriticSwapGNN(nn.Module):
-    def __init__(self, feature_dim_node: int = 3,
-                 out_channels: int = 24,
+    def __init__(self,
+                 feature_dim_node: int = 3,
                  hidden_channels: int = 12,
                  fc_hidden_dim: int = 128,
                  num_gat_layers: int = 4,
@@ -362,14 +362,20 @@ class CriticSwapGNN(nn.Module):
             self.hidden_atts.append(GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads))
         self.final_att = GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads)
 
-        critic_layer = []
-        for _ in range(num_mlp_layers):
-            critic_layer.append(Linear(hidden_channels, hidden_channels))
+        critic_layer = [
+            nn.Sequential(
+                Linear(hidden_channels, fc_hidden_dim),
+                activation())
+        ]
+        for _ in range(num_mlp_layers - 2):
+            critic_layer.append(Linear(fc_hidden_dim, fc_hidden_dim))
             critic_layer.append(activation())
 
-        critic_layer.append(Linear(hidden_channels, 1))
-        self.critic = nn.Sequential(*critic_layer)
+        critic_layer.append(nn.Sequential(
+            Linear(fc_hidden_dim, 1),
+            activation()))
 
+        self.critic = nn.Sequential(*critic_layer)
         self.optimizer = optimizer(self.parameters(), lr=lr)
 
         self.device = device
@@ -378,7 +384,6 @@ class CriticSwapGNN(nn.Module):
     def forward(self, data: Union[Data, Batch], batch: torch.Tensor = None):
         if len(data.type.shape) > 2:
             raise ValueError("Type should be a 1D tensor. Be sure it is not one-hot encoded.")
-
         x = self.type_embedding(data.type.long())
         time_index = data.update_step.unsqueeze(1).to(self.device)
         # Normalize the requests

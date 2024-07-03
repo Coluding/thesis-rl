@@ -47,7 +47,30 @@ class PenaltyWeights:
     NewEdgesDiscoveredReward: float = 1
 
 
+from enum import Enum
+
 class Regions(Enum):
+    AF_SOUTH_1 = "af-south-1"
+    AP_EAST_1 = "ap-east-1"
+    AP_NORTHEAST_1 = "ap-northeast-1"
+    AP_NORTHEAST_2 = "ap-northeast-2"
+    AP_NORTHEAST_3 = "ap-northeast-3"
+    AP_SOUTH_1 = "ap-south-1"
+    AP_SOUTHEAST_1 = "ap-southeast-1"
+    AP_SOUTHEAST_2 = "ap-southeast-2"
+    CA_CENTRAL_1 = "ca-central-1"
+    EU_CENTRAL_1 = "eu-central-1"
+    EU_NORTH_1 = "eu-north-1"
+    EU_SOUTH_1 = "eu-south-1"
+    EU_WEST_1 = "eu-west-1"
+    EU_WEST_2 = "eu-west-2"
+    EU_WEST_3 = "eu-west-3"
+    ME_SOUTH_1 = "me-south-1"
+    SA_EAST_1 = "sa-east-1"
+    US_EAST_1 = "us-east-1"
+    US_EAST_2 = "us-east-2"
+    US_WEST_1 = "us-west-1"
+    US_WEST_2 = "us-west-2"
     ASIA = "asia"
     EUROPE = "europe"
     USA = "usa"
@@ -74,8 +97,267 @@ EuropeRegion = RegionWithDistanceCalc(Regions.EUROPE, (-10, 10, 40, 60), (8, 16)
 USRegion = RegionWithDistanceCalc(Regions.USA, (-130, -80, 20, 50), (16, 24), (20, 60))
 AfricaRegion = RegionWithDistanceCalc(Regions.AFRICA, (-20, 50, -40, 40), (12, 18), (30, 70))
 USSOUTHRegion = RegionWithDistanceCalc(Regions.US_SOUTH, (-130, -80, 10, 20), (16, 24), (15, 45))
+AF_SOUTH_1_Region = RegionWithDistanceCalc(Regions.AF_SOUTH_1, (20, 35, -35, -22), (0, 8), (9, 279))
+AP_EAST_1_Region = RegionWithDistanceCalc(Regions.AP_EAST_1, (114, 118, 22, 25), (8, 16), (3, 280))
+AP_NORTHEAST_1_Region = RegionWithDistanceCalc(Regions.AP_NORTHEAST_1, (138, 145, 35, 43), (16, 24), (6, 360))
+AP_NORTHEAST_2_Region = RegionWithDistanceCalc(Regions.AP_NORTHEAST_2, (135, 140, 34, 38), (0, 8), (4, 390))
+AP_NORTHEAST_3_Region = RegionWithDistanceCalc(Regions.AP_NORTHEAST_3, (135, 140, 34, 38), (8, 16), (4, 367))
+AP_SOUTH_1_Region = RegionWithDistanceCalc(Regions.AP_SOUTH_1, (72, 79, 18, 25), (16, 24), (4, 334))
+AP_SOUTHEAST_1_Region = RegionWithDistanceCalc(Regions.AP_SOUTHEAST_1, (100, 105, 0, 1), (0, 8), (4, 326))
+AP_SOUTHEAST_2_Region = RegionWithDistanceCalc(Regions.AP_SOUTHEAST_2, (150, 155, -40, -30), (8, 16), (5, 314))
+CA_CENTRAL_1_Region = RegionWithDistanceCalc(Regions.CA_CENTRAL_1, (-115, -100, 50, 60), (16, 24), (5, 230))
+EU_CENTRAL_1_Region = RegionWithDistanceCalc(Regions.EU_CENTRAL_1, (5, 15, 48, 52), (0, 8), (4, 167))
+EU_NORTH_1_Region = RegionWithDistanceCalc(Regions.EU_NORTH_1, (18, 25, 58, 65), (8, 16), (4, 219))
+EU_SOUTH_1_Region = RegionWithDistanceCalc(Regions.EU_SOUTH_1, (10, 15, 40, 45), (8, 16), (3, 217))
+EU_WEST_1_Region = RegionWithDistanceCalc(Regions.EU_WEST_1, (-10, 5, 45, 55), (8, 16), (4, 179))
+EU_WEST_2_Region = RegionWithDistanceCalc(Regions.EU_WEST_2, (-5, 0, 51, 53), (8, 16), (4, 189))
+EU_WEST_3_Region = RegionWithDistanceCalc(Regions.EU_WEST_3, (0, 5, 46, 48), (8, 16), (4, 200))
+ME_SOUTH_1_Region = RegionWithDistanceCalc(Regions.ME_SOUTH_1, (35, 45, 25, 30), (0, 8), (4, 283))
+SA_EAST_1_Region = RegionWithDistanceCalc(Regions.SA_EAST_1, (-50, -45, -25, -15), (8, 16), (5, 339))
+US_EAST_1_Region = RegionWithDistanceCalc(Regions.US_EAST_1, (-80, -70, 35, 45), (16, 24), (6, 228))
+US_EAST_2_Region = RegionWithDistanceCalc(Regions.US_EAST_2, (-85, -75, 30, 40), (0, 8), (8, 239))
+US_WEST_1_Region = RegionWithDistanceCalc(Regions.US_WEST_1, (-125, -120, 35, 40), (16, 24), (4, 299))
+US_WEST_2_Region = RegionWithDistanceCalc(Regions.US_WEST_2, (-120, -115, 35, 40), (16, 24), (4, 283))
+
+region_objects = [
+    AF_SOUTH_1_Region, AP_EAST_1_Region, AP_NORTHEAST_1_Region, AP_NORTHEAST_2_Region, AP_NORTHEAST_3_Region,
+    AP_SOUTH_1_Region, AP_SOUTHEAST_1_Region, AP_SOUTHEAST_2_Region, CA_CENTRAL_1_Region, EU_CENTRAL_1_Region,
+    EU_NORTH_1_Region, EU_SOUTH_1_Region, EU_WEST_1_Region, EU_WEST_2_Region, EU_WEST_3_Region, ME_SOUTH_1_Region,
+    SA_EAST_1_Region, US_EAST_1_Region, US_EAST_2_Region, US_WEST_1_Region, US_WEST_2_Region
+]
 
 latencies = {
+    (Regions.AF_SOUTH_1, Regions.AP_EAST_1): (280, 300),
+    (Regions.AF_SOUTH_1, Regions.AP_NORTHEAST_1): (370, 390),
+    (Regions.AF_SOUTH_1, Regions.AP_NORTHEAST_2): (350, 380),
+    (Regions.AF_SOUTH_1, Regions.AP_NORTHEAST_3): (150, 170),
+    (Regions.AF_SOUTH_1, Regions.AP_SOUTH_1): (210, 230),
+    (Regions.AF_SOUTH_1, Regions.AP_SOUTHEAST_1): (403, 423),
+    (Regions.AF_SOUTH_1, Regions.AP_SOUTHEAST_2): (216, 236),
+    (Regions.AF_SOUTH_1, Regions.CA_CENTRAL_1): (150, 170),
+    (Regions.AF_SOUTH_1, Regions.EU_CENTRAL_1): (170, 190),
+    (Regions.AF_SOUTH_1, Regions.EU_NORTH_1): (170, 190),
+    (Regions.AF_SOUTH_1, Regions.EU_SOUTH_1): (170, 190),
+    (Regions.AF_SOUTH_1, Regions.EU_WEST_1): (170, 190),
+    (Regions.AF_SOUTH_1, Regions.EU_WEST_2): (170, 190),
+    (Regions.AF_SOUTH_1, Regions.EU_WEST_3): (170, 190),
+    (Regions.AF_SOUTH_1, Regions.ME_SOUTH_1): (170, 190),
+    (Regions.AF_SOUTH_1, Regions.SA_EAST_1): (170, 190),
+    (Regions.AF_SOUTH_1, Regions.US_EAST_1): (330, 350),
+    (Regions.AF_SOUTH_1, Regions.US_EAST_2): (210, 230),
+    (Regions.AF_SOUTH_1, Regions.US_WEST_1): (250, 270),
+    (Regions.AF_SOUTH_1, Regions.US_WEST_2): (250, 270),
+
+    (Regions.AP_EAST_1, Regions.AP_NORTHEAST_1): (40, 60),
+    (Regions.AP_EAST_1, Regions.AP_NORTHEAST_2): (30, 50),
+    (Regions.AP_EAST_1, Regions.AP_NORTHEAST_3): (50, 70),
+    (Regions.AP_EAST_1, Regions.AP_SOUTH_1): (100, 120),
+    (Regions.AP_EAST_1, Regions.AP_SOUTHEAST_1): (160, 180),
+    (Regions.AP_EAST_1, Regions.AP_SOUTHEAST_2): (230, 250),
+    (Regions.AP_EAST_1, Regions.CA_CENTRAL_1): (160, 180),
+    (Regions.AP_EAST_1, Regions.EU_CENTRAL_1): (250, 270),
+    (Regions.AP_EAST_1, Regions.EU_NORTH_1): (120, 140),
+    (Regions.AP_EAST_1, Regions.EU_SOUTH_1): (120, 140),
+    (Regions.AP_EAST_1, Regions.EU_WEST_1): (120, 140),
+    (Regions.AP_EAST_1, Regions.EU_WEST_2): (120, 140),
+    (Regions.AP_EAST_1, Regions.EU_WEST_3): (120, 140),
+    (Regions.AP_EAST_1, Regions.ME_SOUTH_1): (120, 140),
+    (Regions.AP_EAST_1, Regions.SA_EAST_1): (120, 140),
+    (Regions.AP_EAST_1, Regions.US_EAST_1): (230, 250),
+    (Regions.AP_EAST_1, Regions.US_EAST_2): (230, 250),
+    (Regions.AP_EAST_1, Regions.US_WEST_1): (230, 250),
+    (Regions.AP_EAST_1, Regions.US_WEST_2): (230, 250),
+
+    (Regions.AP_NORTHEAST_1, Regions.AP_NORTHEAST_2): (30, 50),
+    (Regions.AP_NORTHEAST_1, Regions.AP_NORTHEAST_3): (110, 130),
+    (Regions.AP_NORTHEAST_1, Regions.AP_SOUTH_1): (100, 120),
+    (Regions.AP_NORTHEAST_1, Regions.AP_SOUTHEAST_1): (210, 230),
+    (Regions.AP_NORTHEAST_1, Regions.AP_SOUTHEAST_2): (180, 200),
+    (Regions.AP_NORTHEAST_1, Regions.CA_CENTRAL_1): (210, 230),
+    (Regions.AP_NORTHEAST_1, Regions.EU_CENTRAL_1): (200, 220),
+    (Regions.AP_NORTHEAST_1, Regions.EU_NORTH_1): (110, 130),
+    (Regions.AP_NORTHEAST_1, Regions.EU_SOUTH_1): (110, 130),
+    (Regions.AP_NORTHEAST_1, Regions.EU_WEST_1): (110, 130),
+    (Regions.AP_NORTHEAST_1, Regions.EU_WEST_2): (110, 130),
+    (Regions.AP_NORTHEAST_1, Regions.EU_WEST_3): (110, 130),
+    (Regions.AP_NORTHEAST_1, Regions.ME_SOUTH_1): (110, 130),
+    (Regions.AP_NORTHEAST_1, Regions.SA_EAST_1): (110, 130),
+    (Regions.AP_NORTHEAST_1, Regions.US_EAST_1): (210, 230),
+    (Regions.AP_NORTHEAST_1, Regions.US_EAST_2): (210, 230),
+    (Regions.AP_NORTHEAST_1, Regions.US_WEST_1): (210, 230),
+    (Regions.AP_NORTHEAST_1, Regions.US_WEST_2): (210, 230),
+
+    (Regions.AP_NORTHEAST_2, Regions.AP_NORTHEAST_3): (20, 40),
+    (Regions.AP_NORTHEAST_2, Regions.AP_SOUTH_1): (60, 80),
+    (Regions.AP_NORTHEAST_2, Regions.AP_SOUTHEAST_1): (60, 80),
+    (Regions.AP_NORTHEAST_2, Regions.AP_SOUTHEAST_2): (140, 160),
+    (Regions.AP_NORTHEAST_2, Regions.CA_CENTRAL_1): (200, 220),
+    (Regions.AP_NORTHEAST_2, Regions.EU_CENTRAL_1): (200, 220),
+    (Regions.AP_NORTHEAST_2, Regions.EU_NORTH_1): (120, 140),
+    (Regions.AP_NORTHEAST_2, Regions.EU_SOUTH_1): (120, 140),
+    (Regions.AP_NORTHEAST_2, Regions.EU_WEST_1): (120, 140),
+    (Regions.AP_NORTHEAST_2, Regions.EU_WEST_2): (120, 140),
+    (Regions.AP_NORTHEAST_2, Regions.EU_WEST_3): (120, 140),
+    (Regions.AP_NORTHEAST_2, Regions.ME_SOUTH_1): (120, 140),
+    (Regions.AP_NORTHEAST_2, Regions.SA_EAST_1): (120, 140),
+    (Regions.AP_NORTHEAST_2, Regions.US_EAST_1): (200, 220),
+    (Regions.AP_NORTHEAST_2, Regions.US_EAST_2): (200, 220),
+    (Regions.AP_NORTHEAST_2, Regions.US_WEST_1): (200, 220),
+    (Regions.AP_NORTHEAST_2, Regions.US_WEST_2): (200, 220),
+
+    (Regions.AP_NORTHEAST_3, Regions.AP_SOUTH_1): (70, 90),
+    (Regions.AP_NORTHEAST_3, Regions.AP_SOUTHEAST_1): (130, 150),
+    (Regions.AP_NORTHEAST_3, Regions.AP_SOUTHEAST_2): (230, 250),
+    (Regions.AP_NORTHEAST_3, Regions.CA_CENTRAL_1): (210, 230),
+    (Regions.AP_NORTHEAST_3, Regions.EU_CENTRAL_1): (210, 230),
+    (Regions.AP_NORTHEAST_3, Regions.EU_NORTH_1): (130, 150),
+    (Regions.AP_NORTHEAST_3, Regions.EU_SOUTH_1): (130, 150),
+    (Regions.AP_NORTHEAST_3, Regions.EU_WEST_1): (130, 150),
+    (Regions.AP_NORTHEAST_3, Regions.EU_WEST_2): (130, 150),
+    (Regions.AP_NORTHEAST_3, Regions.EU_WEST_3): (130, 150),
+    (Regions.AP_NORTHEAST_3, Regions.ME_SOUTH_1): (130, 150),
+    (Regions.AP_NORTHEAST_3, Regions.SA_EAST_1): (130, 150),
+    (Regions.AP_NORTHEAST_3, Regions.US_EAST_1): (210, 230),
+    (Regions.AP_NORTHEAST_3, Regions.US_EAST_2): (210, 230),
+    (Regions.AP_NORTHEAST_3, Regions.US_WEST_1): (210, 230),
+    (Regions.AP_NORTHEAST_3, Regions.US_WEST_2): (210, 230),
+
+    (Regions.AP_SOUTH_1, Regions.AP_SOUTHEAST_1): (150, 170),
+    (Regions.AP_SOUTH_1, Regions.AP_SOUTHEAST_2): (130, 150),
+    (Regions.AP_SOUTH_1, Regions.CA_CENTRAL_1): (50, 70),
+    (Regions.AP_SOUTH_1, Regions.EU_CENTRAL_1): (210, 230),
+    (Regions.AP_SOUTH_1, Regions.EU_NORTH_1): (120, 140),
+    (Regions.AP_SOUTH_1, Regions.EU_SOUTH_1): (120, 140),
+    (Regions.AP_SOUTH_1, Regions.EU_WEST_1): (120, 140),
+    (Regions.AP_SOUTH_1, Regions.EU_WEST_2): (120, 140),
+    (Regions.AP_SOUTH_1, Regions.EU_WEST_3): (120, 140),
+    (Regions.AP_SOUTH_1, Regions.ME_SOUTH_1): (120, 140),
+    (Regions.AP_SOUTH_1, Regions.SA_EAST_1): (120, 140),
+    (Regions.AP_SOUTH_1, Regions.US_EAST_1): (210, 230),
+    (Regions.AP_SOUTH_1, Regions.US_EAST_2): (210, 230),
+    (Regions.AP_SOUTH_1, Regions.US_WEST_1): (210, 230),
+    (Regions.AP_SOUTH_1, Regions.US_WEST_2): (210, 230),
+
+    (Regions.AP_SOUTHEAST_1, Regions.AP_SOUTHEAST_2): (190, 210),
+    (Regions.AP_SOUTHEAST_1, Regions.CA_CENTRAL_1): (150, 170),
+    (Regions.AP_SOUTHEAST_1, Regions.EU_CENTRAL_1): (160, 180),
+    (Regions.AP_SOUTHEAST_1, Regions.EU_NORTH_1): (120, 140),
+    (Regions.AP_SOUTHEAST_1, Regions.EU_SOUTH_1): (120, 140),
+    (Regions.AP_SOUTHEAST_1, Regions.EU_WEST_1): (120, 140),
+    (Regions.AP_SOUTHEAST_1, Regions.EU_WEST_2): (120, 140),
+    (Regions.AP_SOUTHEAST_1, Regions.EU_WEST_3): (120, 140),
+    (Regions.AP_SOUTHEAST_1, Regions.ME_SOUTH_1): (120, 140),
+    (Regions.AP_SOUTHEAST_1, Regions.SA_EAST_1): (120, 140),
+    (Regions.AP_SOUTHEAST_1, Regions.US_EAST_1): (210, 230),
+    (Regions.AP_SOUTHEAST_1, Regions.US_EAST_2): (210, 230),
+    (Regions.AP_SOUTHEAST_1, Regions.US_WEST_1): (210, 230),
+    (Regions.AP_SOUTHEAST_1, Regions.US_WEST_2): (210, 230),
+
+    (Regions.AP_SOUTHEAST_2, Regions.CA_CENTRAL_1): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.EU_CENTRAL_1): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.EU_NORTH_1): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.EU_SOUTH_1): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.EU_WEST_1): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.EU_WEST_2): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.EU_WEST_3): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.ME_SOUTH_1): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.SA_EAST_1): (150, 170),
+    (Regions.AP_SOUTHEAST_2, Regions.US_EAST_1): (210, 230),
+    (Regions.AP_SOUTHEAST_2, Regions.US_EAST_2): (210, 230),
+    (Regions.AP_SOUTHEAST_2, Regions.US_WEST_1): (210, 230),
+    (Regions.AP_SOUTHEAST_2, Regions.US_WEST_2): (210, 230),
+
+    (Regions.CA_CENTRAL_1, Regions.EU_CENTRAL_1): (90, 110),
+    (Regions.CA_CENTRAL_1, Regions.EU_NORTH_1): (60, 80),
+    (Regions.CA_CENTRAL_1, Regions.EU_SOUTH_1): (60, 80),
+    (Regions.CA_CENTRAL_1, Regions.EU_WEST_1): (60, 80),
+    (Regions.CA_CENTRAL_1, Regions.EU_WEST_2): (60, 80),
+    (Regions.CA_CENTRAL_1, Regions.EU_WEST_3): (60, 80),
+    (Regions.CA_CENTRAL_1, Regions.ME_SOUTH_1): (60, 80),
+    (Regions.CA_CENTRAL_1, Regions.SA_EAST_1): (60, 80),
+    (Regions.CA_CENTRAL_1, Regions.US_EAST_1): (90, 110),
+    (Regions.CA_CENTRAL_1, Regions.US_EAST_2): (90, 110),
+    (Regions.CA_CENTRAL_1, Regions.US_WEST_1): (90, 110),
+    (Regions.CA_CENTRAL_1, Regions.US_WEST_2): (90, 110),
+
+    (Regions.EU_CENTRAL_1, Regions.EU_NORTH_1): (30, 50),
+    (Regions.EU_CENTRAL_1, Regions.EU_SOUTH_1): (100, 120),
+    (Regions.EU_CENTRAL_1, Regions.EU_WEST_1): (20, 40),
+    (Regions.EU_CENTRAL_1, Regions.EU_WEST_2): (20, 40),
+    (Regions.EU_CENTRAL_1, Regions.EU_WEST_3): (20, 40),
+    (Regions.EU_CENTRAL_1, Regions.ME_SOUTH_1): (20, 40),
+    (Regions.EU_CENTRAL_1, Regions.SA_EAST_1): (20, 40),
+    (Regions.EU_CENTRAL_1, Regions.US_EAST_1): (60, 80),
+    (Regions.EU_CENTRAL_1, Regions.US_EAST_2): (60, 80),
+    (Regions.EU_CENTRAL_1, Regions.US_WEST_1): (60, 80),
+    (Regions.EU_CENTRAL_1, Regions.US_WEST_2): (60, 80),
+
+    (Regions.EU_NORTH_1, Regions.EU_SOUTH_1): (110, 130),
+    (Regions.EU_NORTH_1, Regions.EU_WEST_1): (40, 60),
+    (Regions.EU_NORTH_1, Regions.EU_WEST_2): (40, 60),
+    (Regions.EU_NORTH_1, Regions.EU_WEST_3): (40, 60),
+    (Regions.EU_NORTH_1, Regions.ME_SOUTH_1): (40, 60),
+    (Regions.EU_NORTH_1, Regions.SA_EAST_1): (40, 60),
+    (Regions.EU_NORTH_1, Regions.US_EAST_1): (60, 80),
+    (Regions.EU_NORTH_1, Regions.US_EAST_2): (60, 80),
+    (Regions.EU_NORTH_1, Regions.US_WEST_1): (60, 80),
+    (Regions.EU_NORTH_1, Regions.US_WEST_2): (60, 80),
+
+    (Regions.EU_SOUTH_1, Regions.EU_WEST_1): (30, 50),
+    (Regions.EU_SOUTH_1, Regions.EU_WEST_2): (30, 50),
+    (Regions.EU_SOUTH_1, Regions.EU_WEST_3): (30, 50),
+    (Regions.EU_SOUTH_1, Regions.ME_SOUTH_1): (30, 50),
+    (Regions.EU_SOUTH_1, Regions.SA_EAST_1): (30, 50),
+    (Regions.EU_SOUTH_1, Regions.US_EAST_1): (60, 80),
+    (Regions.EU_SOUTH_1, Regions.US_EAST_2): (60, 80),
+    (Regions.EU_SOUTH_1, Regions.US_WEST_1): (60, 80),
+    (Regions.EU_SOUTH_1, Regions.US_WEST_2): (60, 80),
+
+    (Regions.EU_WEST_1, Regions.EU_WEST_2): (90, 110),
+    (Regions.EU_WEST_1, Regions.EU_WEST_3): (60, 80),
+    (Regions.EU_WEST_1, Regions.ME_SOUTH_1): (60, 80),
+    (Regions.EU_WEST_1, Regions.SA_EAST_1): (60, 80),
+    (Regions.EU_WEST_1, Regions.US_EAST_1): (60, 80),
+    (Regions.EU_WEST_1, Regions.US_EAST_2): (60, 80),
+    (Regions.EU_WEST_1, Regions.US_WEST_1): (60, 80),
+    (Regions.EU_WEST_1, Regions.US_WEST_2): (60, 80),
+
+    (Regions.EU_WEST_2, Regions.EU_WEST_3): (60, 80),
+    (Regions.EU_WEST_2, Regions.ME_SOUTH_1): (60, 80),
+    (Regions.EU_WEST_2, Regions.SA_EAST_1): (60, 80),
+    (Regions.EU_WEST_2, Regions.US_EAST_1): (60, 80),
+    (Regions.EU_WEST_2, Regions.US_EAST_2): (60, 80),
+    (Regions.EU_WEST_2, Regions.US_WEST_1): (60, 80),
+    (Regions.EU_WEST_2, Regions.US_WEST_2): (60, 80),
+
+    (Regions.EU_WEST_3, Regions.ME_SOUTH_1): (60, 80),
+    (Regions.EU_WEST_3, Regions.SA_EAST_1): (60, 80),
+    (Regions.EU_WEST_3, Regions.US_EAST_1): (60, 80),
+    (Regions.EU_WEST_3, Regions.US_EAST_2): (60, 80),
+    (Regions.EU_WEST_3, Regions.US_WEST_1): (60, 80),
+    (Regions.EU_WEST_3, Regions.US_WEST_2): (60, 80),
+
+    (Regions.ME_SOUTH_1, Regions.SA_EAST_1): (60, 80),
+    (Regions.ME_SOUTH_1, Regions.US_EAST_1): (60, 80),
+    (Regions.ME_SOUTH_1, Regions.US_EAST_2): (60, 80),
+    (Regions.ME_SOUTH_1, Regions.US_WEST_1): (60, 80),
+    (Regions.ME_SOUTH_1, Regions.US_WEST_2): (60, 80),
+
+    (Regions.SA_EAST_1, Regions.US_EAST_1): (110, 130),
+    (Regions.SA_EAST_1, Regions.US_EAST_2): (30, 50),
+    (Regions.SA_EAST_1, Regions.US_WEST_1): (80, 100),
+    (Regions.SA_EAST_1, Regions.US_WEST_2): (80, 100),
+
+    (Regions.US_EAST_1, Regions.US_EAST_2): (180, 200),
+    (Regions.US_EAST_1, Regions.US_WEST_1): (100, 120),
+    (Regions.US_EAST_1, Regions.US_WEST_2): (140, 160),
+
+    (Regions.US_EAST_2, Regions.US_WEST_1): (130, 150),
+    (Regions.US_EAST_2, Regions.US_WEST_2): (130, 150),
+
+    (Regions.US_WEST_1, Regions.US_WEST_2): (140, 160),
+
+    # BASE REGIONS
     (Regions.ASIA, Regions.EUROPE): (200, 260),
     (Regions.ASIA, Regions.USA): (270, 330),
     (Regions.ASIA, Regions.AFRICA): (220, 280),
@@ -152,7 +434,9 @@ class NetworkEnvironment:
                  cluster_region_start=Regions.ASIA,
                  action_type: ActionType = ActionType.BOTH,
                  period_length=5000,
-                 total_requests_per_interval=10000, k=3, p=1, client_start_region: Union[Regions, dict] = Regions.ASIA):
+                 total_requests_per_interval=10000,
+                 k=3, p=1,
+                 client_start_region: Union[Regions, dict] = Regions.ASIA):
         self.global_step = 1
         self.graph = nx.Graph()
         if len(clusters) != len(region_objects):
@@ -553,13 +837,18 @@ class NetworkEnvironment:
     def _move_client(self, client, region):
         for dc in self.active_replicas:
             if region.region.value in dc:
-                latency = random.randint(10, 100)
+                latency = random.randint(*region.intra_region_latencies)
             else:
-                latency = random.randint(150, 750)
+                region_object = self.str_to_region[dc.split('_')[0]]
+                if (region_object.region, region.region) in latencies:
+                    interval = latencies[(region_object.region, region.region)]
+                else:
+                    interval = latencies[(region.region, region_object.region)]
+                latency = random.randint(*interval)
             try:
                 self.graph[client][dc]['latency'] = latency
             except KeyError:
-                self.graph.add_edge(client, dc, latency=latency)
+                self.graph.add_edge(client,  dc, latency=latency)
 
             self.client_regions[client] = region.region.value
 
@@ -675,9 +964,9 @@ class NetworkEnvironment:
                         colors.append('blue')
                     else:
                         colors.append('gray')
-                elif 'c_' in node[:2]:
-                    pos[node] = (random.uniform(-10, 10), random.uniform(-10, 10))
-                    colors.append('yellow')
+            if 'c_' in node[:2]:
+                pos[node] = (random.uniform(-10, 10), random.uniform(-10, 10))
+                colors.append('yellow')
 
             labels[node] = node
 
@@ -922,7 +1211,7 @@ def main():
     # Example usage
     num_centers = 15
     clusters = [5, 5, 5]  # Europe, Asia, USA
-    num_clients = 30
+    num_clients = 10
 
     env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients, k=1,)
     intial_dcs = list(env.active_replicas)
@@ -941,24 +1230,24 @@ def main():
         if i == 6:
             print("Reconfiguring active nodes")
             print("-------------------------------------------------------------------------")
-            env.step(((intial_dcs[0], 'europe_dc_2'), (initial_passive_dcs[0], 'europe_dc_1')))
+            env.step(((intial_dcs[0], 'europe_dc_1'), (initial_passive_dcs[0], 'europe_dc_1')))
             print("-------------------------------------------------------------------------")
 
         if i == 12:
             print("Reconfiguring active nodes")
             print("-------------------------------------------------------------------------")
-            env.step(((intial_dcs[1], 'europe_dc_1'), (list(env.passive_replicas)[0], 'europe_dc_2')))
+            env.step(((list(env.active_replicas)[0], 'europe_dc_2'), (list(env.passive_replicas)[0], 'europe_dc_1')))
             print("-------------------------------------------------------------------------")
 
         elif i == 20:
             print("Reconfiguring active nodes")
             print("-------------------------------------------------------------------------")
-            env.step(((intial_dcs[2], 'usa_dc_1'), ('europe_dc_2', 'usa_dc_3')))
+            env.step(((list(env.active_replicas)[0], 'europe_dc_3'), (list(env.passive_replicas)[0], 'europe_dc_1')))
             print("-------------------------------------------------------------------------")
         else:
             env.step()
 
-            env.visualize_2d_world()
+        env.visualize()
 
 
 if __name__ == "__main__":

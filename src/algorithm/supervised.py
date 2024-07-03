@@ -1,4 +1,8 @@
+from typing import Union, Tuple
+import torch.nn as nn
 import torch
+from itertools import chain
+from torch import Tensor
 from torch_geometric.data import Data, Batch, Dataset
 from torch_geometric.utils import from_networkx
 from torch.optim import Adam
@@ -7,9 +11,12 @@ from src.model.gnn import CriticSwapGNN
 from src.env.network_simulation import NetworkEnvironment, PenaltyWeights
 
 
+#TODO: only show edges of active nodes
 
 class TorchGraphWrapper:
-    def __init__(self, device = "cuda" if torch.cuda.is_available() else "cpu"):
+    def __init__(self,
+                 device = "cuda" if torch.cuda.is_available() else "cpu",
+            ):
         self.device = device
     def __call__(self, sample):
         observation, reward = sample
@@ -46,7 +53,7 @@ def construct_supervised_samples():
     env = NetworkEnvironment(num_centers=3, k=1, clusters=[2,2,2], num_clients=20, penalty_weights=penalty_weights,
                              period_length=1000000)
 
-    obs_wrapper = TorchGraphWrapper()
+    obs_wrapper = TorchGraphWrapper(device="cpu")
 
     samples = []
     for i in tqdm(range(1000000)):
@@ -66,8 +73,26 @@ class SupervisedDataset(Dataset):
         super().__init__()
         self.samples = samples
 
+    def normalize(self, mean, std, feature="latency"):
+        for sample in self.samples:
+            sample[feature] = (sample[feature] - mean) / std
+
     def __len__(self):
         return len(self.samples)
+
+    def shuffle(
+        self,
+        return_perm: bool = False,
+    ) -> Union['Dataset', Tuple['Dataset', Tensor]]:
+        perm = torch.randperm(len(self))
+        if return_perm:
+            return self[perm], perm
+        return self[perm]
+
+    def shuffle_inplace(self):
+        perm = torch.randperm(len(self))
+        self.samples = [self.samples[i] for i in perm]
+
 
     def __getitem__(self, idx):
         if isinstance(idx, slice):
@@ -88,8 +113,12 @@ class DataLoader:
     def __iter__(self):
         return self
 
+
+    def __len__(self):
+        return len(self.dataset) // self.batch_size
+
     def _reshuffle(self):
-        self.dataset = self.dataset[torch.randperm(len(self.dataset))]
+        self.dataset.shuffle_inplace()
         self.current_index = 0
 
     def __next__(self):
@@ -104,11 +133,24 @@ class DataLoader:
         return batch
 
 
-def construct_samples_and_train(traj_length: int = 5000, batch_size:int = 64, num_trajectories: int = 1000):
+def construct_samples_and_train(traj_length: int = 50000,
+                                batch_size:int = 64,
+                                num_trajectories: int = 1000,
+                                num_epochs: int = 20,
+                                learning_rate: float = 3e-4):
     # Initialize the model, optimizer, and loss function
-    model = CriticSwapGNN()
-    optimizer = Adam(model.parameters(), lr=3e-4)
-    loss = torch.nn.MSELoss()
+    device = "cpu"
+    model = CriticSwapGNN(device=device,
+                          feature_dim_node=16,
+                          hidden_channels=64,
+                          num_heads=2,
+                          activation=nn.LeakyReLU,
+                          num_gat_layers=4,
+                          num_mlp_layers=4,
+                          fc_hidden_dim=64)
+
+    optimizer = Adam(model.parameters(), lr=learning_rate)
+    criterion = torch.nn.MSELoss(reduction="mean")
     penalty_weights = PenaltyWeights(
         LatencyPenalty=1,
         ReconfigurationPenalty=0.001,
@@ -123,12 +165,13 @@ def construct_samples_and_train(traj_length: int = 5000, batch_size:int = 64, nu
         EdgeDifferenceWeight=1,
         NewEdgesDiscoveredReward=1,
     )
-    env = NetworkEnvironment(num_centers=3, k=1, clusters=[2, 2, 2], num_clients=20, penalty_weights=penalty_weights,
+    env = NetworkEnvironment(num_centers=3, k=1, clusters=[5,5, 5], num_clients=20, penalty_weights=penalty_weights,
                              period_length=1000000)
 
     obs_wrapper = TorchGraphWrapper()
+    best_loss = -torch.inf
 
-    for _ in range(num_trajectories):
+    for n in range(num_trajectories):
         trajectory = []
         for i in tqdm(range(traj_length)):
             action = env.random_action()
@@ -136,11 +179,29 @@ def construct_samples_and_train(traj_length: int = 5000, batch_size:int = 64, nu
                       (env.dc_to_int[action[1][0]], env.dc_to_int[action[1][1]]),)
 
             observation, reward, done = env.step(action)
+            reward = (-reward[0], reward[1])
             observation = obs_wrapper((observation, reward))
             trajectory.append(observation)
 
+        targets = torch.stack([x.target for x in trajectory])
+        latencies = chain.from_iterable([x.latency.tolist() for x in trajectory])
+        latencies = torch.tensor(list(latencies))
         dataset = SupervisedDataset(trajectory)
-        train(model, loss, optimizer, dataset, num_epochs=100, batch_size=batch_size)
+        dataset.normalize(latencies.mean(), latencies.std())
+        dataset.normalize(targets.mean(), targets.std(), feature="target")
+        data_loader = DataLoader(batch_size, dataset)
+        # Set the device
+        device = "cpu"
+        # Training loop
+        num_epochs = num_epochs
+        for epoch in range(num_epochs):
+            loss = train_gnn(model, data_loader, optimizer, criterion, device)
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {loss:.4f}")
+
+            if loss < best_loss:
+                torch.save(model.state_dict(), "critic_gcnn.pth")
+                best_loss = loss
+                print(f"Model saved with loss: {loss:.4f}")
 
 def load_dataset():
     return torch.load("env_dataset_samples.pt")
@@ -161,10 +222,9 @@ def train_gnn(model, data_loader, optimizer, criterion, device):
 
 
 def train(model, criterion, optimizer, dataset, num_epochs: int = 10, batch_size:int = 32) -> None:
-    data_loader = DataLoader(32, dataset)
+    data_loader = DataLoader(batch_size, dataset)
     # Set the device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    best_loss = float("inf")
+    device = "cpu"
     # Training loop
     num_epochs = num_epochs
     for epoch in range(num_epochs):
@@ -185,4 +245,5 @@ def save_data():
 
 
 if __name__ == "__main__":
-    construct_samples_and_train()
+    construct_samples_and_train(traj_length=5000, batch_size=16, num_trajectories=100000, num_epochs=20,
+                                learning_rate=0.00001)
