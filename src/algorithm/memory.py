@@ -72,10 +72,8 @@ class OnPolicyMemory:
         }
 
 
-
-
 class ExperienceReplayBuffer:
-    def init(self, max_size: int, batch_size: int):
+    def __init__(self, max_size: int, batch_size: int):
         self.max_size = max_size
         self.batch_size = batch_size
 
@@ -87,7 +85,6 @@ class ExperienceReplayBuffer:
             "dones": [],
         }
         self.current_step = 0
-
 
     def add(self,
             state: Data,
@@ -123,3 +120,18 @@ class ExperienceReplayBuffer:
 
         return states, states_, rewards, actions, dones, indices
 
+    def clear_memory(self):
+        self.memory = {
+            "states": [],
+            "states_": [],
+            "actions": [],
+            "rewards": [],
+            "dones": [],
+        }
+        self.current_step = 0
+
+
+class ExpertKnowledgeReplayBuffer(ExperienceReplayBuffer):
+    def fill_with_expert_knowledge(self, expert_knowledge: Sequence[Dict[str, Any]]):
+        for exp in expert_knowledge:
+            self.add(exp["state"], exp["next_state"], exp["action"], exp["reward"], exp["done"])

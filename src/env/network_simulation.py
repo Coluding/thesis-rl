@@ -436,7 +436,7 @@ class NetworkEnvironment:
                  period_length=5000,
                  total_requests_per_interval=10000,
                  k=3, p=1,
-                 client_start_region: Union[Regions, dict] = Regions.ASIA):
+                 client_start_region: Union[Regions, dict] = Regions.ASIA, display_all_latencies: bool = False):
         self.global_step = 1
         self.graph = nx.Graph()
         if len(clusters) != len(region_objects):
@@ -502,6 +502,16 @@ class NetworkEnvironment:
 
         self.period_length = period_length
         self._total_number_of_edges = self._compute_total_number_of_potential_edges_between_dcs()
+
+        self.display_all_latencies = display_all_latencies
+
+        if self.display_all_latencies:
+            self._add_all_dc_latencies_to_graph()
+
+    def _add_all_dc_latencies_to_graph(self):
+        # add all the dc latencies to graph
+        for dc1, dc2 in self.internal_latencies:
+            self.graph.add_edge(dc1, dc2, latency=self.internal_latencies[(dc1, dc2)])
 
     def _compute_total_number_of_potential_edges_between_dcs(self):
         total = 0
@@ -912,6 +922,9 @@ class NetworkEnvironment:
 
         self.global_step += 1
 
+        if self.display_all_latencies:
+            self._add_all_dc_latencies_to_graph()
+
         return self.graph, reward, done
 
     def _get_active_and_passive_reward(self):
@@ -1224,7 +1237,8 @@ def main():
     clusters = [5, 5, 5]  # Europe, Asia, USA
     num_clients = 10
 
-    env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients, k=1,)
+    env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients, k=1,
+                             display_all_latencies=True)
     intial_dcs = list(env.active_replicas)
     print(f"Initial active data centers: {intial_dcs}")
     initial_passive_dcs = list(env.passive_replicas)
@@ -1258,7 +1272,7 @@ def main():
         else:
             env.step()
 
-        env.visualize()
+        env.visualize_2d_world()
 
 
 if __name__ == "__main__":

@@ -8,13 +8,14 @@ import numpy as np
 from typing import Tuple, Optional
 import torch_geometric
 from tqdm import tqdm
-from typing import List
+from typing import List, Union
 import logging
 import warnings
-from torchrl.data import ReplayBuffer, ListStorage, PrioritizedReplayBuffer, PrioritizedSampler
+from torch_geometric.data import Data, Batch
+from enum import Enum
 
 from src.model.gnn import SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN
-from src.algorithm.memory import OnPolicyMemory
+from src.algorithm.memory import OnPolicyMemory, ExperienceReplayBuffer
 
 logging.basicConfig(
     filename='training.log',  # Specify the file to log to
@@ -347,6 +348,10 @@ class PPOAgentActionTypeBoth(AbstractAgent):
     def get_buffer_size(self):
         return len(self.memory.memory["states"])
 
+class EpsilonDecayStrategies(Enum):
+    LINEAR = 1
+    SINUSOIDAL = 2
+    EXPONENTIAL = 3
 
 @dataclass
 class DQNConfig:
@@ -362,20 +367,26 @@ class DQNConfig:
     mem_size: int = 1000000
     batch_size: int = 64
     replace_target: int = 1000
-    chkpt_dir: str = "tmp/dqn"
+    chkpt_dir: str = "logs/models/tmp/dqn"
     alpha_prioritized_replay: float = 0.6
     beta_prioritized_replay: float = 0.4
     beta_increment_per_sampling: float = 0.001
+    summary_writer: Optional[SummaryWriter] = SummaryWriter
+    decay_strategy: EpsilonDecayStrategies = EpsilonDecayStrategies.LINEAR
 
     def __post_init__(self):
         if self.prioritized_replay:
             warnings.warn("Prioritized replay is enabled. Make sure to set the alpha and beta values correctly in your "
                           "config.")
 
+        if self.q_target2 is not None:
+            warnings.warn("Two target networks are enabled. Make sure to set the q_target2 parameter correctly in your "
+                          "config. With the current setup Double-DQN is activated")
+
 
 class DQGNAgent(AbstractAgent):
     def __init__(self, config: DQNConfig):
-        super().__init__()
+        super().__init__(config)
         self.chkpt_dir = config.chkpt_dir
         self.alpha = config.alpha
         self.gamma = config.gamma
@@ -385,30 +396,100 @@ class DQGNAgent(AbstractAgent):
         self.prioritized_replay = config.prioritized_replay
         self.batch_size = config.batch_size
         self.replace_target = config.replace_target
-        self.memory = ReplayBuffer(storage=ListStorage(max_size=config.mem_size))
+        self.memory = ExperienceReplayBuffer(max_size=config.mem_size,
+                                             batch_size=config.batch_size)
         self.learn_step_counter = 0
-        self.q_eval = config.q_eval()
+        self.q_eval = config.q_eval
+        self.decay_strategy = config.decay_strategy
+
         if config.q_target2 is not None:
-            self.q_target1 = config.q_target1()
-            self.q_target2 = config.q_target2()
+            self.q_target1 = config.q_target1
+            self.q_target2 = config.q_target2
         else:
-            self.q_target = config.q_target1()
+            self.q_target = config.q_target1
 
-
+        self.summary_writer = config.summary_writer(log_dir="logs/tensorboard")
+        self.loss = nn.MSELoss(reduction="mean")
         self.two_targets = config.q_target2 is not None
 
-    def choose_action(self, state):
+    def choose_action(self, state, num_locs=None):
         if np.random.random() > self.epsilon:
-            state = torch.tensor(state, dtype=torch.float).to(self.q_eval.device)
             actions = self.q_eval(state)
             action = torch.argmax(actions).item()
         else:
-            action = np.random.choice([0, 1])
+            remove_action = int(np.random.choice(torch.where(state.active_mask[:num_locs] == -np.inf)[0].cpu()))
+            add_action = int(np.random.choice(torch.where(state.passive_mask[:num_locs] != -np.inf)[0].cpu()))
+            action = (remove_action, add_action)
         return action
 
-    def decrement_epsilon(self):
-        self.epsilon = self.epsilon - self.eps_dec if self.epsilon > self.eps_min else self.eps_min
+    def _sinusoidal_decay(self, episode: int, min_epsilon: float = 0.01, max_epsilon: float = 1.0, period: int = 2000):
+        amplitude = (max_epsilon - min_epsilon) / 2
+        midpoint = (max_epsilon + min_epsilon) / 2
+        epsilon = amplitude * np.sin(2 * np.pi * episode / period) + midpoint
+        return epsilon
 
+    def decrement_epsilon(self):
+        match self.decay_strategy:
+            case EpsilonDecayStrategies.LINEAR:
+                self.epsilon = self.epsilon - self.eps_dec if self.epsilon > self.eps_min else self.eps_min
+            case EpsilonDecayStrategies.SINUSOIDAL:
+                self.epsilon = self._sinusoidal_decay(self.learn_step_counter)
+            case EpsilonDecayStrategies.EXPONENTIAL:
+                raise NotImplementedError("Exponential decay is not implemented yet")
+
+    def compute_td_error(self,
+                         states: Batch,
+                         states_: Batch,
+                         action: Tuple[int, int],
+                         rewards: float,
+                         dones: torch.BoolTensor,
+                         grad: bool = True) -> torch.Tensor:
+
+        rewards = torch.tensor(rewards).to(self.q_eval.device)
+        actions = torch.tensor(action).to(self.q_eval.device)
+        if grad:
+            q_pred_vals = self.q_eval.forward(states, states.batch)
+            q_pred_vals = torch.stack(q_pred_vals.q_values)
+            q_pred_remove = q_pred_vals[..., 0][torch.arange(len(actions[..., 0])), actions[..., 0]]
+            q_pred_add = q_pred_vals[..., 1][torch.arange(len(actions[..., 1])), actions[..., 1]]
+            q_next_vals1 = self.q_target1.forward(states_, states_.batch)
+            q_next_vals2 = self.q_target2.forward(states_, states_.batch)
+            q_next_vals1_remove_max = torch.max(torch.stack(q_next_vals1.q_values)[..., 0], dim=1)[0]
+            q_next_vals2_remove_max = torch.max(torch.stack(q_next_vals2.q_values)[..., 0], dim=1)[0]
+            q_next_vals1_add_max = torch.max(torch.stack(q_next_vals1.q_values)[..., 1], dim=1)[0]
+            q_next_vals2_add_max = torch.max(torch.stack(q_next_vals2.q_values)[..., 1], dim=1)[0]
+            q_value_next_remove = torch.min(q_next_vals1_remove_max, q_next_vals2_remove_max)
+            q_value_next_add = torch.min(q_next_vals1_add_max, q_next_vals2_add_max)
+
+            q_target_remove = rewards + self.gamma * q_value_next_remove
+            q_target_remove[dones] = 0.0
+            q_target_add = rewards + self.gamma * q_value_next_add
+            q_target_add[dones] = 0.0
+
+            loss = self.loss(q_pred_remove, q_target_remove) + self.loss(q_pred_add, q_target_add)
+
+        else:
+            with torch.no_grad():
+                q_pred_vals = self.q_eval.forward(states)
+                q_pred_remove = q_pred_vals[0][action[0]]
+                q_pred_add = q_pred_vals[1][action[1]]
+                q_next_vals1 = self.q_target1.forward(states_)
+                q_next_vals2 = self.q_target2.forward(states_)
+                q_next_vals1_remove_max = torch.max(q_next_vals1[0], dim=1)[0]
+                q_next_vals2_remove_max = torch.max(q_next_vals2[0], dim=1)[0]
+                q_next_vals1_add_max = torch.max(q_next_vals1[1], dim=1)[0]
+                q_next_vals2_add_max = torch.max(q_next_vals2[1], dim=1)[0]
+                q_value_next_remove = torch.min(q_next_vals1_remove_max, q_next_vals2_remove_max)
+                q_value_next_add = torch.min(q_next_vals1_add_max, q_next_vals2_add_max)
+
+                q_target_remove = rewards + self.gamma * q_value_next_remove
+                q_target_remove[dones] = 0.0
+                q_target_add = rewards + self.gamma * q_value_next_add
+                q_target_add[dones] = 0.0
+
+                loss = self.loss(q_pred_remove, q_target_remove) + self.loss(q_pred_add, q_target_add)
+
+        return loss
 
     def replace_target_network(self):
         if self.learn_step_counter % self.replace_target == 0:
@@ -420,24 +501,48 @@ class DQGNAgent(AbstractAgent):
                 self.q_target.load_state_dict(self.q_eval.state_dict())
 
     def add_experience(self, state, state_, action, reward, done, prob=None):
-        self.memory.add((state, action, done, reward))
+        self.memory.add(state, state_, action, reward, done)
 
     def learn(self):
-        pass
+        if self.memory.current_step < self.batch_size:
+            return None, None
 
+        self.q_eval.optimizer.zero_grad()
+        self.replace_target_network()
+
+        states, states_, rewards, actions, dones, indices = self.memory.sample()
+
+        loss = self.compute_td_error(states, states_, actions, rewards, dones, grad=True)
+        loss.backward()
+        self.q_eval.optimizer.step()
+        self.learn_step_counter += 1
+
+        self.decrement_epsilon()
+
+        return loss, self.epsilon
 
     def save_models(self):
-        pass
+        torch.save(self.q_eval.state_dict(), self.chkpt_dir + "/q_eval.pth")
+        if self.two_targets:
+            torch.save(self.q_target1.state_dict(), self.chkpt_dir + "/q_target1.pth")
+            torch.save(self.q_target2.state_dict(), self.chkpt_dir + "/q_target2.pth")
+        else:
+            torch.save(self.q_target.state_dict(), self.chkpt_dir + "/q_target.pth")
 
     def load_models(self):
-        pass
+        self.q_eval.load_state_dict(torch.load(self.chkpt_dir + "/q_eval.pth"))
+        if self.two_targets:
+            self.q_target1.load_state_dict(torch.load(self.chkpt_dir + "/q_target1.pth"))
+            self.q_target2.load_state_dict(torch.load(self.chkpt_dir + "/q_target2.pth"))
+        else:
+            self.q_target.load_state_dict(torch.load(self.chkpt_dir + "/q_target.pth"))
 
     def get_average_loss(self):
         pass
 
     def get_buffer_size(self):
-        pass
+        return self.memory.current_step
 
 
     def clear_memory(self):
-        pass
+        self.memory.clear_memory()

@@ -272,6 +272,7 @@ class CustomNetworkConfig:
     render_mode: Optional[str] = "human"
     render_type: Optional[str] = "2d"
     fps: Optional[int] = 2
+    display_all_latencies_from_start: Optional[bool] = False
 
 
 class CustomRequestHandlerPNG(http.server.SimpleHTTPRequestHandler):
@@ -330,6 +331,7 @@ class NetworkEnvGym(gym.Env):
             k=config.num_active,
             p=config.num_passive,
             client_start_region=config.client_start_region,
+            display_all_latencies=config.display_all_latencies_from_start
         )
 
         self.env = env

@@ -10,12 +10,13 @@ import logging
 from tqdm import tqdm
 
 from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN, QNetworkSwapGNN
-from src.algorithm.agents import SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth, PPOAgentActionTypeBoth, AbstractAgent
+from src.algorithm.agents import SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth, PPOAgentActionTypeBoth, AbstractAgent, DQGNAgent, DQNConfig
 from src.env.env import RSMEnvConfig, RSMEnv, TorchGraphObservationWrapper, TorchGraphNetworkxWrapper, NetworkEnvGym, CustomNetworkConfig, StackStatesTemporal
 from src.env.network_simulation import *
 
 class TrainingAlgorithms(Enum):
     PPO = 1
+    DDQN = 2
 
 logging.basicConfig(
     filename='training.log',  # Specify the file to log to
@@ -92,7 +93,7 @@ class RepStateMachineTrainerRL:
         self.agent.load_models()
         logging.info("Models loaded")
 
-    def train(self):
+    def train_ppo(self):
         logging.info("Training started")
         period_active_rewards, period_passive_rewards, step_active_rewards, step_passive_rewards, losses = [], [], [], [], []
         best_reward = -float('inf')
@@ -180,6 +181,91 @@ class RepStateMachineTrainerRL:
             logging.info(f"Step {self.global_step}: Active Reward: {total_active_reward:.4f}")
             logging.info(f"Step {self.global_step}: Passive Reward: {total_passive_reward:.4f}")
 
+    def train_ddqn(self):
+        logging.info("Training started")
+        period_active_rewards, step_active_rewards, losses = [], [], []
+        best_reward = -float('inf')
+
+        length_training = self.training_params.num_train_runs * self.training_params.train_steps
+        train_iterator = tqdm(range(length_training), desc="Training DDQN", total=length_training)
+        while True:
+            state, _ = self.env.reset()
+            action = (self.env.inner_env.no_op_active(), self.env.inner_env.no_op_passive())
+            state, reward, done, _, _ = self.env.step(action)
+            done = False
+            total_active_reward = 0
+
+            while not done:
+                period_steps = 0
+                num_locs = len(self.env.base_env.dc_to_int)
+                action = self.agent.choose_action(state, num_locs=num_locs)
+                remove_action = int(np.random.choice(torch.where(state.passive_mask[:num_locs] == -np.inf)[0].cpu()))
+                add_action = int(np.random.choice(torch.where(state.passive_mask[:num_locs] != -np.inf)[0].cpu()))
+                passive_random_action = (remove_action, add_action)
+                action_for_env = (action, passive_random_action)
+                next_state, reward, done, _, _ = self.env.step(action_for_env)
+                self.agent.add_experience(state, next_state, action, reward[0], done)
+                state = next_state
+                total_active_reward += reward[0]
+
+                if self.global_step % self.training_params.train_steps == 0:
+                    if self.agent.get_buffer_size() < self.agent.memory.batch_size:
+                        logging.info(f"Step {self.global_step}: Memory buffer not filled yet")
+                    else:
+                        logging.info(f"Step {self.global_step}: Training")
+                        loss, epsilon = self.agent.learn()
+
+                        if self.summary_writer is not None:
+                            self.summary_writer.add_scalar("target  loss", loss, self.global_step)
+                        losses.append(loss)
+
+                        if total_active_reward > best_reward:
+                            best_reward = total_active_reward
+                            self.save_models()
+                            logging.info(f"Step {self.global_step}: New best reward: {best_reward:.4f}")
+
+
+
+                        logging.info(
+                            f"Step {self.global_step}: Rewards: Active: "
+                            f"{total_active_reward / self.training_params.train_steps:.4f}"
+                        )
+
+
+                self.global_step += 1
+                period_steps += 1
+                train_iterator.update(1)
+                if self.global_step % self.training_params.evaluation_period_in_steps == 0:
+                    self.evaluate()
+
+                step_active_rewards.append(reward[0])
+
+                self.summary_writer.add_scalar("Reward/Step", reward[0],
+                                               self.global_step) if self.summary_writer is not None else None
+
+            # TODO: maybe include early stop of env period if penalty is too high
+
+            # rewards will be tracked for every period
+            period_active_rewards.append(total_active_reward)
+            logging.info(f"Period finished after {period_steps} steps")
+            self.summary_writer.add_scalar("Total Reward/Period", total_active_reward,
+                                           self.global_step) if self.summary_writer is not None else None
+
+            # log rolling average of rewards
+            active_roll_avg = sum(step_active_rewards[-1000:]) / 1000
+            logging.info(f"Step {self.global_step}: Rolling Average Reward: {active_roll_avg:.4f}")
+            self.summary_writer.add_scalar(" Rolling Average Reward", active_roll_avg,
+                                           self.global_step) if self.summary_writer is not None else None
+            logging.info(f"Step {self.global_step}: Reward: {total_active_reward:.4f}")
+
+    def train(self):
+        if self.training_algorithm == TrainingAlgorithms.PPO:
+            self.train_ppo()
+        elif self.training_algorithm == TrainingAlgorithms.DDQN:
+            self.train_ddqn()
+        else:
+            raise NotImplementedError(f"Training algorithm {self.training_algorithm} not implemented")
+
     def evaluate(self):
         print("evaluation not implemented yet")
 
@@ -190,7 +276,7 @@ class RepStateMachineTrainerRL:
         pass
 
 def main():
-    device = "cpu"
+    device = "cuda"
     clusters = [5, 5, 5]
 
     penalty_weights = PenaltyWeights(
@@ -212,7 +298,9 @@ def main():
     assert num_active <= clusters[1]
     assert num_active <= clusters[2]
     config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="human",
-                                 render_type="2d", device=device, penalty_weights=penalty_weights, num_active=3)
+                                 render_type="2d", device=device, penalty_weights=penalty_weights, num_active=3,
+                                 display_all_latencies_from_start=True
+                                 )
 
     # num gat_layers should be max 2 since the longest path is 2 and mor elayers would not add more information ?????
     swap_active = TransformerSwapGNN(n_layers=4,
@@ -260,7 +348,7 @@ def main():
     ppo_config = SwapPPOAgentConfigActionTypeBoth(swap_active, critic_active, swap_passive, critic_passive,
                                                   batch_size=32, n_epochs=2,
                                                   summary_writer=SummaryWriter(log_dir="logs/tensorboard"),
-                                                  lr=0.001)
+                                                  lr=0.005)
     agent = PPOAgentActionTypeBoth(ppo_config)
 
     env = NetworkEnvGym(config)
@@ -276,5 +364,95 @@ def main():
 
     trainer.train()
 
+
+def dqn():
+    device = "cuda"
+    clusters = [5, 5, 5]
+
+    penalty_weights = PenaltyWeights(
+        LatencyPenalty=1,
+        ReconfigurationPenalty=0.001,
+        PassiveCost=0.001,
+        ActiveCost=0.001,
+        WrongActivePenalty=0.001,
+        WrongPassivePenalty=0.001,
+        WrongActiveAfterPassivePenalty=0.001,
+        WrongNumberPassivePenalty=0.001,
+        ActiveNodeAlsoPassivePenalty=0.001,
+        ReExplorationPassiveWeight=1,
+        EdgeDifferenceWeight=1,
+        NewEdgesDiscoveredReward=1,
+    )
+    num_active = 3
+    assert num_active <= clusters[0]
+    assert num_active <= clusters[1]
+    assert num_active <= clusters[2]
+    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="human",
+                                 render_type="2d", device=device, penalty_weights=penalty_weights, num_active=3,
+                                 display_all_latencies_from_start=True
+                                 )
+
+    q_eval = QNetworkSwapGNN(device=device,
+                             feature_size=3,
+                             embedding_size=64,
+                             n_heads=3,
+                             dropout_rate=0.2,
+                             n_layers=3,
+                             dense_neurons=256,
+                             edge_dim=1,
+                             num_locations=sum(clusters),
+                             for_active=True,
+                             lr=0.0001,
+                             optimizer=torch.optim.AdamW,
+                             reduce_action_space=False
+                             )
+
+    q_target_1 = QNetworkSwapGNN(device=device,
+                                 feature_size=3,
+                                 embedding_size=64,
+                                 n_heads=3,
+                                 dropout_rate=0.2,
+                                 n_layers=3,
+                                 dense_neurons=256,
+                                 edge_dim=1,
+                                 num_locations=sum(clusters),
+                                 for_active=True,
+                                 lr=0.0001,
+                                 optimizer=torch.optim.AdamW,
+                                 reduce_action_space=False
+                                 )
+
+    q_target_2 = QNetworkSwapGNN(device=device,
+                                 feature_size=3,
+                                 embedding_size=64,
+                                 n_heads=3,
+                                 dropout_rate=0.2,
+                                 n_layers=3,
+                                 dense_neurons=256,
+                                 edge_dim=1,
+                                 num_locations=sum(clusters),
+                                 for_active=True,
+                                 lr=0.0001,
+                                 optimizer=torch.optim.AdamW,
+                                 reduce_action_space=False
+                                 )
+
+    ddqn_config = DQNConfig(q_eval, q_target_1, q_target_2, batch_size=256, replace_target=1000)
+
+    agent = DQGNAgent(ddqn_config)
+
+    env = NetworkEnvGym(config)
+    env = TorchGraphNetworkxWrapper(env, one_hot=False)
+
+    training_args = TrainingParams(train_steps=2, num_train_runs=1000000)
+
+    trainer_config = RepStateMachineTrainerConfig(agent=agent, env=env, training_params=training_args, day_periods=1000,
+                                                  training_algorithm=TrainingAlgorithms.DDQN)
+
+    trainer = RepStateMachineTrainerRL(trainer_config)
+
+    trainer.train()
+
+
 if __name__ == '__main__':
-    main()
+    dqn()

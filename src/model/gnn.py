@@ -647,13 +647,12 @@ class QNetworkSwapGNN(nn.Module):
                  n_heads: int = 4,
                  n_layers: int = 3,
                  dropout_rate: float = 0.,
-                 top_k_ratio: float = 0.1,
                  dense_neurons: int = 128,
                  edge_dim: int = 1,
                  num_locations: int = 15,
                  for_active: bool = True,
                  lr: float = 0.0001,
-                 optimizer: nn.Module = torch.optim.Adam,
+                 optimizer: object = torch.optim.Adam,
                  reduce_action_space: bool = True
                  ):
 
@@ -669,7 +668,8 @@ class QNetworkSwapGNN(nn.Module):
             edge_dim=edge_dim,
             n_heads=n_heads,
             dropout_rate=dropout_rate,
-            dense_neurons=dense_neurons
+            dense_neurons=dense_neurons,
+            n_layers=n_layers
         )
 
         self.node_embedding_transformation = nn.Sequential(
