@@ -9,7 +9,7 @@ from typing import Optional
 import logging
 from tqdm import tqdm
 
-from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN
+from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN, QNetworkSwapGNN
 from src.algorithm.agents import SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth, PPOAgentActionTypeBoth, AbstractAgent
 from src.env.env import RSMEnvConfig, RSMEnv, TorchGraphObservationWrapper, TorchGraphNetworkxWrapper, NetworkEnvGym, CustomNetworkConfig, StackStatesTemporal
 from src.env.network_simulation import *
@@ -190,7 +190,7 @@ class RepStateMachineTrainerRL:
         pass
 
 def main():
-    device = "cuda"
+    device = "cpu"
     clusters = [5, 5, 5]
 
     penalty_weights = PenaltyWeights(
@@ -244,6 +244,7 @@ def main():
                            dropout_rate=0.2,
                            top_k_ratio=0.5,
                            dense_neurons=256,
+                                   device=device
                            )
 
     critic_passive = TransformerGNN(n_layers=4,
@@ -253,6 +254,7 @@ def main():
                            dropout_rate=0.2,
                            top_k_ratio=0.5,
                            dense_neurons=256,
+                            device=device
                            )
 
     ppo_config = SwapPPOAgentConfigActionTypeBoth(swap_active, critic_active, swap_passive, critic_passive,

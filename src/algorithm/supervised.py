@@ -10,6 +10,8 @@ from tqdm import tqdm
 from src.model.gnn import CriticSwapGNN, TransformerGNN
 from src.env.network_simulation import NetworkEnvironment, PenaltyWeights
 
+from cpprb import ReplayBuffer
+replay = ReplayBuffer(buffer_size=1000000)
 
 #TODO: only show edges of active nodes
 
@@ -63,6 +65,7 @@ def construct_supervised_samples():
 
         observation, reward, done = env.step(action)
         observation = obs_wrapper((observation, reward))
+        replay.add(observation)
         samples.append(observation)
     return samples
 
@@ -139,7 +142,7 @@ def construct_samples_and_train(traj_length: int = 50000,
                                 num_epochs: int = 20,
                                 learning_rate: float = 3e-4):
     # Initialize the model, optimizer, and loss function
-    device = "cuda"
+    device = "cpu"
     model = CriticSwapGNN(device=device,
                           feature_dim_node=16,
                           hidden_channels=64,
@@ -156,7 +159,10 @@ def construct_samples_and_train(traj_length: int = 50000,
                            dropout_rate=0.2,
                            top_k_ratio=0.5,
                            dense_neurons=256,
+                           device=device
                            )
+
+    #model.load_state_dict(torch.load("critic_gcnn.pth"))
 
     optimizer = Adam(model.parameters(), lr=learning_rate)
     criterion = torch.nn.MSELoss(reduction="mean")
@@ -175,8 +181,8 @@ def construct_samples_and_train(traj_length: int = 50000,
         NewEdgesDiscoveredReward=1,
     )
     env = NetworkEnvironment(num_centers=3, k=3, clusters=[5,5, 5],
-                             num_clients=20,
-                             #penalty_weights=penalty_weights,
+                             num_clients=50,
+                             penalty_weights=penalty_weights,
                              period_length=1000000)
 
     obs_wrapper = TorchGraphWrapper()
@@ -192,6 +198,7 @@ def construct_samples_and_train(traj_length: int = 50000,
             observation, reward, done = env.step(action)
             reward = (-reward[0], reward[1])
             observation = obs_wrapper((observation, reward))
+            replay.add(observation)
             trajectory.append(observation)
 
         targets = torch.stack([x.target for x in trajectory])
@@ -202,7 +209,7 @@ def construct_samples_and_train(traj_length: int = 50000,
         dataset.normalize(targets.mean(), targets.std(), feature="target")
         data_loader = DataLoader(batch_size, dataset)
         # Set the device
-        device = "cuda"
+        device = "cpu"
         # Training loop
         num_epochs = num_epochs
         for epoch in range(num_epochs):

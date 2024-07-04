@@ -1,5 +1,5 @@
 from typing import Union, List, Tuple, Dict, Optional, Any
-from torch_geometric_temporal.signal import DynamicGraphTemporalSignal
+#from torch_geometric_temporal.signal import DynamicGraphTemporalSignal
 import matplotlib.figure
 import matplotlib.pyplot as plt
 import gym
@@ -542,6 +542,7 @@ class StackStatesTemporal(gym.ObservationWrapper):
         active_mask = [graph.active_mask.cpu().numpy() for graph in graphs]
         passive_mask = [graph.passive_mask.cpu().numpy() for graph in graphs]
 
+        """
         temporal_graph = DynamicGraphTemporalSignal(
             features=node_features,
             edge_indices=edge_indices,
@@ -552,3 +553,4 @@ class StackStatesTemporal(gym.ObservationWrapper):
         )
 
         return temporal_graph
+        """

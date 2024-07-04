@@ -2,6 +2,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from torch_geometric.data import Batch
 from gym.wrappers.monitoring.video_recorder import VideoRecorder
 #from src.env.java import JavaClassManager, jvm_context, SimulationWrapper
 from src.env.env import (IntervalResult,
@@ -13,8 +14,9 @@ from src.env.env import (IntervalResult,
                          CustomNetworkConfig,
                          StackStatesTemporal)
 
-from src.algorithm.agents import SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth, PPOAgentActionTypeBoth
-from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN
+from src.algorithm.agents import (SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth,
+                                  PPOAgentActionTypeBoth)
+from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN, QNetworkSwapGNN
 from src.model.temporal_gnn import SemiTemporalSwapGNN
 
 def use_java():
@@ -70,14 +72,14 @@ def use_custom():
 
     swap_active = SwapGNN(4, 4, 64, 128, num_nodes=15,
                           for_active=True, num_locations=sum(clusters), device=device)
-    swap_active = TransformerSwapGNN(n_layers=4,
-                                     feature_size=2,
-                                     n_heads=3,
-                                     embedding_size=64,
-                                     dropout_rate=0.2,
-                                     top_k_ratio=0.5,
-                                     dense_neurons=256,
-                                     device="cpu"
+    swap_active = QNetworkSwapGNN(n_layers=4,
+                                  feature_size=3,
+                                  n_heads=3,
+                                  embedding_size=64,
+                                  dropout_rate=0.2,
+                                  top_k_ratio=0.5,
+                                  dense_neurons=256,
+                                  device="cpu"
                            )
     swap_passive = SwapGNN(4, 4, 64, 128, num_nodes=15,
                            for_active=False, num_locations=sum(clusters), device=device)
@@ -100,8 +102,8 @@ def use_custom():
     action = (env.env.env.no_op_active(), env.env.env.no_op_passive())
     state, reward, done, _, _ = env.step(action)
 
-    temp_state = env_extended.step(action)
-    temp_gnn(temp_state[0])
+    #temp_state = env_extended.step(action)
+    #temp_gnn(temp_state[0])
     #for i in range(10):
      #   state, reward, done, _, _ = env_extended.step(action)
     done = False
@@ -122,7 +124,8 @@ def use_custom():
             log_prob_active = torch.tensor([-0.1, -0.1])
             log_prob_passive = torch.tensor([-0.1, -0.1])
         else:
-            active_out = swap_active(state)
+            b = Batch.from_data_list([state, state])
+            active_out = swap_active(b, b.batch)
             action_active = active_out.actions
             log_prob_active = active_out.log_probs
             passive_out = swap_passive(state)

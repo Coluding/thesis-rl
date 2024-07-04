@@ -7,7 +7,7 @@ from torch_geometric.nn import (
     GCNConv, global_mean_pool, GAT, GATConv, GlobalAttention, TransformerConv, TopKPooling, global_max_pool
 )
 import torch
-from typing import Sequence, Union
+from typing import Sequence, Union, List, Optional, Dict, Tuple
 from dataclasses import dataclass
 import numpy as np
 
@@ -534,27 +534,22 @@ class TransformerSwapGNN(nn.Module):
         self.pooling_layers = nn.ModuleList([])
         self.bn_layers = nn.ModuleList([])
 
-        self.conv1 = TransformerConv(
-            feature_size, embedding_size, heads=n_heads, dropout=dropout_rate, edge_dim=1, beta=True
+        self.node_embedding_constructor = NetworkGraphEmbeddingConstructor(
+            feature_size=feature_size,
+            embedding_size=embedding_size,
+            edge_dim=edge_dim,
+            n_heads=n_heads,
+            dropout_rate=dropout_rate,
+            dense_neurons=dense_neurons
         )
 
-        self.transf1 = Linear(embedding_size*n_heads, embedding_size)
-        self.bn1 = BatchNorm1d(embedding_size)
-
-        for i in range(self.n_layers):
-            self.conv_layers.append(TransformerConv(embedding_size,
-                                                    embedding_size,
-                                                    heads=n_heads,
-                                                    dropout=dropout_rate,
-                                                    edge_dim=edge_dim,
-                                                    beta=True))
-
-            self.transf_layers.append(Linear(embedding_size * n_heads, embedding_size))
-            self.bn_layers.append(BatchNorm1d(embedding_size))
-
-        # Linear transformation layers to prepare attention embedding for the location selection logits
-        self.linear1 = Linear(embedding_size, dense_neurons)
-        self.linear2 = Linear(dense_neurons, int(dense_neurons / 2))
+        self.embedding_transformation = nn.Sequential(
+            nn.Linear(embedding_size, dense_neurons),
+            nn.ReLU(),
+            nn.Linear(dense_neurons, dense_neurons // 2),
+            nn.ReLU(),
+            nn.Linear(dense_neurons // 2, dense_neurons // 2)
+        )
 
         self.remove_facility_layer = Linear(dense_neurons // 2, 1)
         self.add_facility_projector = Linear(dense_neurons // 2, dense_neurons // 2)
@@ -569,22 +564,8 @@ class TransformerSwapGNN(nn.Module):
         x = torch.cat([data.type.unsqueeze(1), data.requests.unsqueeze(1)], dim=1)
         edge_index = data.edge_index
         edge_attr = data.latency.unsqueeze(1).to(torch.float)
-        x = self.conv1(x, edge_index, edge_attr)
-        x = torch.relu(self.transf1(x))
-        x = self.bn1(x)
-
-        # Holds the intermediate graph representations
-        global_representation = []
-
-        for i in range(self.n_layers):
-            x = self.conv_layers[i](x, edge_index, edge_attr)
-            x = torch.relu(self.transf_layers[i](x))
-            x = self.bn_layers[i](x)
-
-        # Output block
-        x = torch.relu(self.linear1(x))
-        x = F.dropout(x, p=0.8, training=self.training)
-        x = torch.relu(self.linear2(x))
+        x = self.node_embedding_constructor(x, edge_index, edge_attr)
+        x = self.embedding_transformation(x)
 
         if batch_index is None:
             action_mask = data.active_mask if self.for_active else data.passive_mask
@@ -651,44 +632,197 @@ class TransformerSwapGNN(nn.Module):
         return SwapGNNOutput(logits, actions, log_probs)
 
 
-class QNetworkSwapGNN:
-    def __init__(self, feature_dim_node: int = 3,
-                 out_channels: int = 24,
-                 hidden_channels: int = 12,
-                 fc_hidden_dim: int = 128,
-                 num_gat_layers: int = 4,
-                 num_mlp_layers:int = 3,
-                 num_heads=4,
-                 activation=nn.ReLU,
-                 num_nodes: int = None,
+@dataclass
+class QNetworkOutput:
+    q_values: List[Union[Tuple[torch.Tensor], torch.tensor]]
+    reduced_graph_node_mapping_remove: Optional[List[Dict[int, int]]] = None
+    reduced_graph_node_mapping_add: Optional[List[Dict[int, int]]] = None
+
+
+class QNetworkSwapGNN(nn.Module):
+    def __init__(self,
+                 device: str = "cuda",
+                 feature_size: int = 4,
+                 embedding_size: int = 32,
+                 n_heads: int = 4,
+                 n_layers: int = 3,
+                 dropout_rate: float = 0.,
+                 top_k_ratio: float = 0.1,
+                 dense_neurons: int = 128,
+                 edge_dim: int = 1,
                  num_locations: int = 15,
                  for_active: bool = True,
-                 device: str = "cuda",
+                 lr: float = 0.0001,
                  optimizer: nn.Module = torch.optim.Adam,
-                 lr: float = 3e-4,
+                 reduce_action_space: bool = True
                  ):
+
         super(QNetworkSwapGNN, self).__init__()
-        self.num_nodes = num_nodes
         self.for_active = for_active
         self.num_locations = num_locations
-        out_dim = 1
-        self.type_embedding = nn.Embedding(4, feature_dim_node)
-        self.activation = activation()
-        self.att = GATConv(feature_dim_node + 2, hidden_channels//num_heads, heads=num_heads)
-        self.hidden_atts = nn.ModuleList()
-        for _ in range(num_gat_layers - 2):
-            self.hidden_atts.append(GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads))
-        self.final_att = GATConv(hidden_channels, hidden_channels//num_heads, heads=num_heads)
+        self._reduce_action_space = reduce_action_space
+        out_dim = 2 if not reduce_action_space else 1
 
-        critic_layer = []
-        for _ in range(num_mlp_layers):
-            critic_layer.append(Linear(hidden_channels, hidden_channels))
-            critic_layer.append(activation())
+        self.node_embedding_constructor = NetworkGraphEmbeddingConstructor(
+            feature_size=feature_size,
+            embedding_size=embedding_size,
+            edge_dim=edge_dim,
+            n_heads=n_heads,
+            dropout_rate=dropout_rate,
+            dense_neurons=dense_neurons
+        )
 
-        critic_layer.append(Linear(hidden_channels, 1))
-        self.critic = nn.Sequential(*critic_layer)
+        self.node_embedding_transformation = nn.Sequential(
+            Linear(embedding_size, dense_neurons),
+            nn.ReLU(),
+            Linear(dense_neurons, dense_neurons //2),
+            nn.ReLU(),
+            Linear(dense_neurons // 2, dense_neurons // 4),
+            nn.ReLU(),
+            Linear(dense_neurons // 4, out_dim)
+        )
+
+        if self._reduce_action_space:
+            self.node_embedding_transformation_2 = nn.Sequential(
+                Linear(embedding_size, dense_neurons),
+                nn.ReLU(),
+                Linear(dense_neurons, dense_neurons // 2),
+                nn.ReLU(),
+                Linear(dense_neurons // 2, dense_neurons // 4),
+                nn.ReLU(),
+                Linear(dense_neurons // 4, out_dim)
+            )
 
         self.optimizer = optimizer(self.parameters(), lr=lr)
 
         self.device = device
         self.to(self.device)
+
+    def _reduce_graph(self, node_embeddings, data, batch_index=None, graph_idx=None):
+        mask = data.active_mask if self.for_active else data.passive_mask
+        if batch_index is not None:
+            mask = mask[batch_index == graph_idx]
+        remove_mask = mask.clone()
+        remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -np.inf
+        remove_mask[:self.num_locations][mask[:self.num_locations] == -np.inf] = 0
+
+        remove_mask_mapping = self._construct_index_to_node_index_mapper(remove_mask)
+        add_mask_mapping = self._construct_index_to_node_index_mapper(mask)
+
+        reduced_node_embeddings_removable = node_embeddings[remove_mask != -np.inf]
+        reduced_node_embeddings_addable = node_embeddings[mask != -np.inf]
+
+        return reduced_node_embeddings_removable, remove_mask_mapping, reduced_node_embeddings_addable, add_mask_mapping
+
+    def _construct_index_to_node_index_mapper(self, mask):
+        index_to_node_index = []
+        mask_indices = torch.where(mask == 0)[0]
+        index_to_node_index.append({i: v.item() for i, v in enumerate(mask_indices)})
+        return [index_to_node_index]
+
+    def forward(self, data, batch_index=None) -> QNetworkOutput:
+        x = torch.cat([
+            data.type.unsqueeze(1),
+            data.requests.unsqueeze(1),
+            data.update_step.unsqueeze(1)], dim=1)
+
+        edge_index = data.edge_index
+        edge_attr = data.latency.unsqueeze(1).to(torch.float)
+        x = self.node_embedding_constructor(x, edge_index, edge_attr)
+
+        if batch_index is None:
+
+            reduced_embbeddings_and_mappings = (None, None, None, None)
+
+            if self._reduce_action_space:
+                reduced_embbeddings_and_mappings = self._reduce_graph(x, data, batch_index)
+                removed_node_value = self.node_embedding_transformation(reduced_embbeddings_and_mappings[0])
+                added_node_value = self.node_embedding_transformation_2(reduced_embbeddings_and_mappings[2])
+                q_values = (removed_node_value, added_node_value)
+            else:
+                q_values = [self.node_embedding_transformation(x)]
+
+            return QNetworkOutput(q_values=q_values,
+                                  reduced_graph_node_mapping_remove=reduced_embbeddings_and_mappings[1],
+                                  reduced_graph_node_mapping_add=reduced_embbeddings_and_mappings[3])
+
+        else:
+            q_values = []
+            reduced_graph_node_mapping_remove = []
+            reduced_graph_node_mapping_add = []
+            for graph_idx in batch_index.unique():
+                reduced_embbeddings_and_mappings = (None, None, None, None)
+
+                if self._reduce_action_space:
+                    reduced_embbeddings_and_mappings = self._reduce_graph(x[batch_index == graph_idx],
+                                                                          data,
+                                                                          batch_index,
+                                                                          graph_idx)
+                    removed_node_value = self.node_embedding_transformation(reduced_embbeddings_and_mappings[0])
+                    added_node_value = self.node_embedding_transformation_2(reduced_embbeddings_and_mappings[2])
+                    q_values_single = (removed_node_value, added_node_value)
+                else:
+                    q_values_single = self.node_embedding_transformation(x[batch_index == graph_idx])
+
+                q_values.append(q_values_single)
+                reduced_graph_node_mapping_remove.append(reduced_embbeddings_and_mappings[1])
+                reduced_graph_node_mapping_add.append(reduced_embbeddings_and_mappings[3])
+
+            if self._reduce_action_space:
+                q_values = (
+                    torch.stack([x[0] for x in q_values]),
+                    torch.stack([x[1] for x in q_values])
+                )
+
+            return QNetworkOutput(q_values=q_values,
+                                  reduced_graph_node_mapping_remove=reduced_graph_node_mapping_remove,
+                                  reduced_graph_node_mapping_add=reduced_graph_node_mapping_add)
+
+
+class NetworkGraphEmbeddingConstructor(nn.Module):
+    def __init__(self,
+                 embedding_size:int,
+                 n_heads: int,
+                 dropout_rate: float,
+                 feature_size: int,
+                 dense_neurons: int,
+                 edge_dim: int = 1,
+                 n_layers=4):
+        super().__init__()
+        self.n_layers = n_layers
+        self.conv1 = TransformerConv(
+            feature_size, embedding_size, heads=n_heads, dropout=dropout_rate, edge_dim=1, beta=True
+        )
+
+        self.conv_layers = nn.ModuleList([])
+        self.transf_layers = nn.ModuleList([])
+        self.bn_layers = nn.ModuleList([])
+
+
+        self.transf1 = Linear(embedding_size * n_heads, embedding_size)
+        self.bn1 = BatchNorm1d(embedding_size)
+
+        for i in range(self.n_layers):
+            self.conv_layers.append(TransformerConv(embedding_size,
+                                                    embedding_size,
+                                                    heads=n_heads,
+                                                    dropout=dropout_rate,
+                                                    edge_dim=edge_dim,
+                                                    beta=True))
+
+            self.transf_layers.append(Linear(embedding_size * n_heads, embedding_size))
+            self.bn_layers.append(BatchNorm1d(embedding_size))
+
+
+    def forward(self, x, edge_index, edge_attr):
+        x = self.conv1(x, edge_index, edge_attr)
+        x = torch.relu(self.transf1(x))
+        x = self.bn1(x)
+
+
+        for i in range(self.n_layers):
+            x = self.conv_layers[i](x, edge_index, edge_attr)
+            x = torch.relu(self.transf_layers[i](x))
+            x = self.bn_layers[i](x)
+
+        return x

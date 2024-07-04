@@ -6,6 +6,7 @@ from torch_geometric.data import Data, Batch
 from typing import Dict, Tuple
 import copy
 
+
 class OnPolicyMemory:
     def __init__(self, trajectory_size: int,  batch_size: int):
         self.memory = {
@@ -69,3 +70,56 @@ class OnPolicyMemory:
             "dones": [],
             "probs": []
         }
+
+
+
+
+class ExperienceReplayBuffer:
+    def init(self, max_size: int, batch_size: int):
+        self.max_size = max_size
+        self.batch_size = batch_size
+
+        self.memory = {
+            "states": [],
+            "states_": [],
+            "actions": [],
+            "rewards": [],
+            "dones": [],
+        }
+        self.current_step = 0
+
+
+    def add(self,
+            state: Data,
+            next_state: Data,
+            action: Tuple[Tuple[int, int], Tuple[int, int]],
+            reward: float, done: bool) -> None:
+        state = copy.deepcopy(state)
+        next_state = copy.deepcopy(next_state)
+
+        if self.current_step > self.max_size:
+            insert_ind = self.current_step % self.max_size
+            self.memory["states"].insert(insert_ind, state)
+            self.memory['actions'].insert(insert_ind, action)
+            self.memory["states_"].insert(insert_ind, next_state)
+            self.memory['rewards'].insert(insert_ind, reward)
+            self.memory['dones'].insert(insert_ind, done)
+        else:
+            self.memory['states'].append(state)
+            self.memory['actions'].append(action)
+            self.memory["states_"].append(next_state)
+            self.memory['rewards'].append(reward)
+            self.memory['dones'].append(done)
+
+        self.current_step += 1
+
+    def sample(self):
+        indices = np.random.choice(np.arange(self.current_step), self.batch_size, replace=False)
+        states = Batch.from_data_list([self.memory["states"][i] for i in indices])
+        states_ = Batch.from_data_list([self.memory["states_"][i] for i in indices])
+        rewards = [self.memory["rewards"][i] for i in indices]
+        actions = [self.memory["actions"][i] for i in indices]
+        dones = [self.memory["dones"][i] for i in indices]
+
+        return states, states_, rewards, actions, dones, indices
+

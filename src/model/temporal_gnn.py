@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch_geometric.data
 from torch_geometric.data import Data, Batch
 from torch_geometric.nn import AGNNConv, global_mean_pool, GAT, GATConv, GlobalAttention, Linear
-from torch_geometric_temporal.nn import GraphAAGCN
+#from torch_geometric_temporal.nn import GraphAAGCN
 import torch
 from typing import Sequence, Union
 from dataclasses import dataclass
@@ -68,7 +68,8 @@ class SemiTemporalSwapGNN(nn.Module):
         self.to(self.device)
 
 
-    def forward(self, data_full: torch_geometric.data.Data,
+    def forward(self,
+                data_full: torch_geometric.data.Data,
                 batch: torch.Tensor = None,):
 
         time_step_embeddings = []

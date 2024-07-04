@@ -10,6 +10,8 @@ import torch_geometric
 from tqdm import tqdm
 from typing import List
 import logging
+import warnings
+from torchrl.data import ReplayBuffer, ListStorage, PrioritizedReplayBuffer, PrioritizedSampler
 
 from src.model.gnn import SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN
 from src.algorithm.memory import OnPolicyMemory
@@ -344,3 +346,98 @@ class PPOAgentActionTypeBoth(AbstractAgent):
 
     def get_buffer_size(self):
         return len(self.memory.memory["states"])
+
+
+@dataclass
+class DQNConfig:
+    q_eval: nn.Module
+    q_target1: nn.Module
+    q_target2: Optional[nn.Module]
+    alpha: float = 0.001
+    gamma: float = 0.99
+    epsilon: float = 1.0
+    eps_min: float = 0.01
+    eps_dec: float = 1e-5
+    prioritized_replay: bool = False
+    mem_size: int = 1000000
+    batch_size: int = 64
+    replace_target: int = 1000
+    chkpt_dir: str = "tmp/dqn"
+    alpha_prioritized_replay: float = 0.6
+    beta_prioritized_replay: float = 0.4
+    beta_increment_per_sampling: float = 0.001
+
+    def __post_init__(self):
+        if self.prioritized_replay:
+            warnings.warn("Prioritized replay is enabled. Make sure to set the alpha and beta values correctly in your "
+                          "config.")
+
+
+class DQGNAgent(AbstractAgent):
+    def __init__(self, config: DQNConfig):
+        super().__init__()
+        self.chkpt_dir = config.chkpt_dir
+        self.alpha = config.alpha
+        self.gamma = config.gamma
+        self.epsilon = config.epsilon
+        self.eps_min = config.eps_min
+        self.eps_dec = config.eps_dec
+        self.prioritized_replay = config.prioritized_replay
+        self.batch_size = config.batch_size
+        self.replace_target = config.replace_target
+        self.memory = ReplayBuffer(storage=ListStorage(max_size=config.mem_size))
+        self.learn_step_counter = 0
+        self.q_eval = config.q_eval()
+        if config.q_target2 is not None:
+            self.q_target1 = config.q_target1()
+            self.q_target2 = config.q_target2()
+        else:
+            self.q_target = config.q_target1()
+
+
+        self.two_targets = config.q_target2 is not None
+
+    def choose_action(self, state):
+        if np.random.random() > self.epsilon:
+            state = torch.tensor(state, dtype=torch.float).to(self.q_eval.device)
+            actions = self.q_eval(state)
+            action = torch.argmax(actions).item()
+        else:
+            action = np.random.choice([0, 1])
+        return action
+
+    def decrement_epsilon(self):
+        self.epsilon = self.epsilon - self.eps_dec if self.epsilon > self.eps_min else self.eps_min
+
+
+    def replace_target_network(self):
+        if self.learn_step_counter % self.replace_target == 0:
+            if self.two_targets:
+                self.q_target1.load_state_dict(self.q_eval.state_dict())
+                self.q_target2.load_state_dict(self.q_eval.state_dict())
+
+            else:
+                self.q_target.load_state_dict(self.q_eval.state_dict())
+
+    def add_experience(self, state, state_, action, reward, done, prob=None):
+        self.memory.add((state, action, done, reward))
+
+    def learn(self):
+        pass
+
+
+    def save_models(self):
+        pass
+
+    def load_models(self):
+        pass
+
+    def get_average_loss(self):
+        pass
+
+    def get_buffer_size(self):
+        pass
+
+
+    def clear_memory(self):
+        pass
