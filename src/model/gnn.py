@@ -698,13 +698,13 @@ class QNetworkSwapGNN(nn.Module):
         self.device = device
         self.to(self.device)
 
+        # TODO: include the embedding of the remove location in the predcition process of the add location
+
     def _reduce_graph(self, node_embeddings, data, batch_index=None, graph_idx=None):
-        mask = data.active_mask if self.for_active else data.passive_mask
+        mask, remove_mask = self.construct_masks(data)
         if batch_index is not None:
             mask = mask[batch_index == graph_idx]
-        remove_mask = mask.clone()
-        remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -np.inf
-        remove_mask[:self.num_locations][mask[:self.num_locations] == -np.inf] = 0
+            remove_mask = remove_mask[batch_index == graph_idx]
 
         remove_mask_mapping = self._construct_index_to_node_index_mapper(remove_mask)
         add_mask_mapping = self._construct_index_to_node_index_mapper(mask)
@@ -713,6 +713,14 @@ class QNetworkSwapGNN(nn.Module):
         reduced_node_embeddings_addable = node_embeddings[mask != -np.inf]
 
         return reduced_node_embeddings_removable, remove_mask_mapping, reduced_node_embeddings_addable, add_mask_mapping
+
+    def construct_masks(self, data):
+        mask = data.active_mask if self.for_active else data.passive_mask
+        remove_mask = mask.clone()
+        remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -np.inf
+        remove_mask[:self.num_locations][mask[:self.num_locations] == -np.inf] = 0
+
+        return mask, remove_mask
 
     def _construct_index_to_node_index_mapper(self, mask):
         index_to_node_index = []
@@ -733,6 +741,7 @@ class QNetworkSwapGNN(nn.Module):
         if batch_index is None:
 
             reduced_embbeddings_and_mappings = (None, None, None, None)
+            mask, remove_mask = self.construct_masks(data)
 
             if self._reduce_action_space:
                 reduced_embbeddings_and_mappings = self._reduce_graph(x, data, batch_index)
@@ -740,7 +749,10 @@ class QNetworkSwapGNN(nn.Module):
                 added_node_value = self.node_embedding_transformation_2(reduced_embbeddings_and_mappings[2])
                 q_values = (removed_node_value, added_node_value)
             else:
-                q_values = [self.node_embedding_transformation(x)]
+                add_mask = torch.cat(
+                    (remove_mask.unsqueeze(1), mask.unsqueeze(1)),
+                    dim=1)
+                q_values = [self.node_embedding_transformation(x) + add_mask]
 
             return QNetworkOutput(q_values=q_values,
                                   reduced_graph_node_mapping_remove=reduced_embbeddings_and_mappings[1],
@@ -750,6 +762,7 @@ class QNetworkSwapGNN(nn.Module):
             q_values = []
             reduced_graph_node_mapping_remove = []
             reduced_graph_node_mapping_add = []
+            mask, remove_mask = self.construct_masks(data)
             for graph_idx in batch_index.unique():
                 reduced_embbeddings_and_mappings = (None, None, None, None)
 
@@ -763,6 +776,8 @@ class QNetworkSwapGNN(nn.Module):
                     q_values_single = (removed_node_value, added_node_value)
                 else:
                     q_values_single = self.node_embedding_transformation(x[batch_index == graph_idx])
+                    add_mask = torch.cat((remove_mask[batch_index == graph_idx].unsqueeze(1),mask[batch_index == graph_idx].unsqueeze(1)), dim=1)
+                    q_values_single = q_values_single + add_mask
 
                 q_values.append(q_values_single)
                 reduced_graph_node_mapping_remove.append(reduced_embbeddings_and_mappings[1])

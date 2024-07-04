@@ -414,8 +414,8 @@ class DQGNAgent(AbstractAgent):
 
     def choose_action(self, state, num_locs=None):
         if np.random.random() > self.epsilon:
-            actions = self.q_eval(state)
-            action = torch.argmax(actions).item()
+            q_values = self.q_eval(state).q_values
+            action = tuple([ac.item() for ac in torch.argmax(q_values[0][:num_locs,...], dim=0).cpu()])
         else:
             remove_action = int(np.random.choice(torch.where(state.active_mask[:num_locs] == -np.inf)[0].cpu()))
             add_action = int(np.random.choice(torch.where(state.passive_mask[:num_locs] != -np.inf)[0].cpu()))

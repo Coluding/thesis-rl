@@ -225,7 +225,6 @@ class RepStateMachineTrainerRL:
                             logging.info(f"Step {self.global_step}: New best reward: {best_reward:.4f}")
 
 
-
                         logging.info(
                             f"Step {self.global_step}: Rewards: Active: "
                             f"{total_active_reward / self.training_params.train_steps:.4f}"
