@@ -73,7 +73,7 @@ class OnPolicyMemory:
 
 
 class ExperienceReplayBuffer:
-    def __init__(self, max_size: int, batch_size: int):
+    def __init__(self, max_size: int, batch_size: int, normalize_latencies: bool = True):
         self.max_size = max_size
         self.batch_size = batch_size
 
@@ -85,6 +85,16 @@ class ExperienceReplayBuffer:
             "dones": [],
         }
         self.current_step = 0
+        self.should_normalize_latencies = normalize_latencies
+        self.latency_avg_tracker = 0
+        self.latency_std_tracker = 0
+
+
+    def normalize_latencies(self, latencies, mean, std):
+        return (latencies - mean) / std
+
+    def denormalize_latencies(self, latencies, mean, std):
+        return latencies * std + mean
 
     def add(self,
             state: Data,
@@ -93,6 +103,14 @@ class ExperienceReplayBuffer:
             reward: float, done: bool) -> None:
         state = copy.deepcopy(state)
         next_state = copy.deepcopy(next_state)
+
+        if self.should_normalize_latencies:
+            self.latency_avg_tracker += torch.mean(torch.cat((state.latency, next_state.latency))).item()
+            self.latency_std_tracker += torch.std(torch.cat((state.latency, next_state.latency))).item()
+            mean_latency = self.latency_avg_tracker / (self.current_step + 1)
+            std_latency = self.latency_std_tracker / (self.current_step + 1)
+            state.latency = self.normalize_latencies(state.latency, mean_latency, std_latency)
+            next_state.latency = self.normalize_latencies(next_state.latency, mean_latency, std_latency)
 
         if self.current_step > self.max_size:
             insert_ind = self.current_step % self.max_size

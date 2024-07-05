@@ -181,11 +181,11 @@ class RepStateMachineTrainerRL:
             logging.info(f"Step {self.global_step}: Active Reward: {total_active_reward:.4f}")
             logging.info(f"Step {self.global_step}: Passive Reward: {total_passive_reward:.4f}")
 
+
     def train_ddqn(self):
         logging.info("Training started")
         period_active_rewards, step_active_rewards, losses = [], [], []
         best_reward = -float('inf')
-
         length_training = self.training_params.num_train_runs * self.training_params.train_steps
         train_iterator = tqdm(range(length_training), desc="Training DDQN", total=length_training)
         while True:
@@ -275,7 +275,7 @@ class RepStateMachineTrainerRL:
         pass
 
 def main():
-    device = "cuda"
+    device = "cpu"
     clusters = [5, 5, 5]
 
     penalty_weights = PenaltyWeights(
@@ -365,7 +365,7 @@ def main():
 
 
 def dqn():
-    device = "cuda"
+    device = "cpu"
     clusters = [5, 5, 5]
 
     penalty_weights = PenaltyWeights(
@@ -436,14 +436,14 @@ def dqn():
                                  reduce_action_space=False
                                  )
 
-    ddqn_config = DQNConfig(q_eval, q_target_1, q_target_2, batch_size=256, replace_target=1000)
+    ddqn_config = DQNConfig(q_eval, q_target_1, q_target_2, batch_size=128, replace_target=1000)
 
     agent = DQGNAgent(ddqn_config)
 
     env = NetworkEnvGym(config)
     env = TorchGraphNetworkxWrapper(env, one_hot=False)
 
-    training_args = TrainingParams(train_steps=2, num_train_runs=1000000)
+    training_args = TrainingParams(train_steps=10, num_train_runs=1000000)
 
     trainer_config = RepStateMachineTrainerConfig(agent=agent, env=env, training_params=training_args, day_periods=1000,
                                                   training_algorithm=TrainingAlgorithms.DDQN)

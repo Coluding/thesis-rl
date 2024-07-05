@@ -715,7 +715,8 @@ class QNetworkSwapGNN(nn.Module):
         return reduced_node_embeddings_removable, remove_mask_mapping, reduced_node_embeddings_addable, add_mask_mapping
 
     def construct_masks(self, data):
-        mask = data.active_mask if self.for_active else data.passive_mask
+        data_mask = data.active_mask if self.for_active else data.passive_mask
+        mask = data_mask.clone()
         remove_mask = mask.clone()
         remove_mask[:self.num_locations][mask[:self.num_locations] == 0] = -np.inf
         remove_mask[:self.num_locations][mask[:self.num_locations] == -np.inf] = 0
@@ -749,10 +750,13 @@ class QNetworkSwapGNN(nn.Module):
                 added_node_value = self.node_embedding_transformation_2(reduced_embbeddings_and_mappings[2])
                 q_values = (removed_node_value, added_node_value)
             else:
+                q_values_single = self.node_embedding_transformation(x)
+                remove_action = torch.argmax(q_values_single[:, 0] + remove_mask)
+                mask[remove_action] = 0
                 add_mask = torch.cat(
                     (remove_mask.unsqueeze(1), mask.unsqueeze(1)),
                     dim=1)
-                q_values = [self.node_embedding_transformation(x) + add_mask]
+                q_values = [q_values_single + add_mask]
 
             return QNetworkOutput(q_values=q_values,
                                   reduced_graph_node_mapping_remove=reduced_embbeddings_and_mappings[1],
@@ -776,6 +780,8 @@ class QNetworkSwapGNN(nn.Module):
                     q_values_single = (removed_node_value, added_node_value)
                 else:
                     q_values_single = self.node_embedding_transformation(x[batch_index == graph_idx])
+                    remove_action = torch.argmax(q_values_single[:, 0] + remove_mask[batch_index == graph_idx])
+                    mask[remove_action] = 0
                     add_mask = torch.cat((remove_mask[batch_index == graph_idx].unsqueeze(1),mask[batch_index == graph_idx].unsqueeze(1)), dim=1)
                     q_values_single = q_values_single + add_mask
 
@@ -828,12 +834,10 @@ class NetworkGraphEmbeddingConstructor(nn.Module):
             self.transf_layers.append(Linear(embedding_size * n_heads, embedding_size))
             self.bn_layers.append(BatchNorm1d(embedding_size))
 
-
     def forward(self, x, edge_index, edge_attr):
         x = self.conv1(x, edge_index, edge_attr)
         x = torch.relu(self.transf1(x))
         x = self.bn1(x)
-
 
         for i in range(self.n_layers):
             x = self.conv_layers[i](x, edge_index, edge_attr)
