@@ -9,7 +9,10 @@ from enum import Enum
 import plotly.graph_objects as go  # Import Plotly for visualization
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import copy
 from abc import ABC, abstractmethod
+
+from src.env.data_collector import create_interactive_visualization
 
 #TODO: Different reward for active and passive nodes
 
@@ -358,9 +361,9 @@ latencies = {
     (Regions.US_WEST_1, Regions.US_WEST_2): (140, 160),
 
     # BASE REGIONS
-    (Regions.ASIA, Regions.EUROPE): (200, 260),
-    (Regions.ASIA, Regions.USA): (270, 330),
-    (Regions.ASIA, Regions.AFRICA): (220, 280),
+    (Regions.ASIA, Regions.EUROPE): (300, 360),
+    (Regions.ASIA, Regions.USA): (400, 450),
+    (Regions.ASIA, Regions.AFRICA): (320, 380),
     (Regions.ASIA, Regions.EU_WEST): (190, 230),
     (Regions.ASIA, Regions.EU_EAST): (200, 240),
     (Regions.ASIA, Regions.US_WEST): (260, 320),
@@ -369,7 +372,7 @@ latencies = {
     (Regions.ASIA, Regions.ASIA_WEST): (80, 120),
     (Regions.ASIA, Regions.US_SOUTH): (280, 340),
 
-    (Regions.EUROPE, Regions.USA): (100, 140),
+    (Regions.EUROPE, Regions.USA): (180, 250),
     (Regions.EUROPE, Regions.AFRICA): (150, 210),
     (Regions.EUROPE, Regions.EU_WEST): (30, 50),
     (Regions.EUROPE, Regions.EU_EAST): (40, 60),
@@ -379,7 +382,7 @@ latencies = {
     (Regions.EUROPE, Regions.ASIA_WEST): (170, 230),
     (Regions.EUROPE, Regions.US_SOUTH): (120, 160),
 
-    (Regions.USA, Regions.AFRICA): (190, 250),
+    (Regions.USA, Regions.AFRICA): (290, 350),
     (Regions.USA, Regions.EU_WEST): (90, 130),
     (Regions.USA, Regions.EU_EAST): (100, 140),
     (Regions.USA, Regions.US_WEST): (50, 90),
@@ -436,7 +439,8 @@ class NetworkEnvironment:
                  period_length=5000,
                  total_requests_per_interval=10000,
                  k=3, p=1,
-                 client_start_region: Union[Regions, dict] = Regions.ASIA, display_all_latencies: bool = False):
+                 client_start_region: Union[Regions, dict] = Regions.ASIA, display_all_latencies: bool = False,
+                 adjust_request_weights_during_day: bool = False):
         self.global_step = 1
         self.graph = nx.Graph()
         if len(clusters) != len(region_objects):
@@ -470,6 +474,8 @@ class NetworkEnvironment:
         self.p = p  # Number of passive data centers
         self.str_to_region = None
         self._initialize_data_centers()
+
+        self.adjust_request_weights_during_day = adjust_request_weights_during_day
 
         self.dc_to_int = {dc: i for i, dc in enumerate(self.data_centers)}
         self.int_to_dc = {i: dc for i, dc in enumerate(self.data_centers)}
@@ -616,7 +622,6 @@ class NetworkEnvironment:
                                               random.uniform(loc.coordinates[2], loc.coordinates[3]))
 
     def reconfigure_active_nodes(self):
-        self.update_client_latencies()
         self.update_active_dc_latencies(self.active_replicas)
 
     def reconfigure_passive_nodes(self):
@@ -699,6 +704,16 @@ class NetworkEnvironment:
         self.active_history = self.active_history.union(self.active_replicas)
         self.passive_history = self.passive_history.union(self.passive_replicas)
         self.update_available_replicas()
+
+    def _scale_latencies(self):
+        if self.current_latency > 600:
+            self.current_latency *= 3
+        elif 500 < self.current_latency < 600:
+            self.current_latency *= 2.5
+        elif 350 < self.current_latency < 500:
+            self.current_latency *= 2
+        elif 50 < self.current_latency < 180:
+            self.current_latency *= 0.6
 
     def review_passive_action(self, action: Tuple[str, str]) -> bool:
         """
@@ -799,10 +814,12 @@ class NetworkEnvironment:
 
         for client in self.clients:
             for active in self.active_replicas:
-                #total_latency += (self.get_latency(client, active) * (
-                #    self.current_request_distribution[client] / self.total_requests_per_interval))
-                total_latency += self.get_latency(client, active)
+                total_latency += (self.get_latency(client, active) *
+                    self.current_request_distribution[client] )
+                #total_latency += self.get_latency(client, active)
                 count += 1
+
+        total_latency /= self.total_requests_per_interval
 
         active_replicas_list = list(self.active_replicas)
         for i in range(len(active_replicas_list)):
@@ -810,19 +827,21 @@ class NetworkEnvironment:
                 total_latency += self.get_latency(active_replicas_list[i], active_replicas_list[j])
                 count += 1
 
-        self.current_latency = total_latency / count if count != 0 else 0
+        self.current_latency = total_latency
 
     def _distribute_requests(self):
-        # adjust client weights according to their location
-        weights = np.zeros(len(self.clients))
-        for i, client in enumerate(self.clients):
-            region = self.client_regions[client]
-            peak_times = self.str_to_region[region].peak_times
-            inverted_dist = 1 / self._compute_time_distance_of_intervals(self.time_of_day,
-                                                                        (peak_times[0] + peak_times[1]) / 2)
-            weights[i] = inverted_dist
+        if self.adjust_request_weights_during_day:
+            # adjust client weights according to their location
+            weights = np.zeros(len(self.clients))
+            for i, client in enumerate(self.clients):
+                region = self.client_regions[client]
+                peak_times = self.str_to_region[region].peak_times
+                inverted_dist = 1 / self._compute_time_distance_of_intervals(self.time_of_day,
+                                                                            (peak_times[0] + peak_times[1]) / 2)
+                weights[i] = inverted_dist
 
-        self.client_weights = weights
+            self.client_weights = weights
+
         requests = np.random.dirichlet(self.client_weights, 1)[0] * self.total_requests_per_interval
         request_distribution = dict(zip(self.clients, requests.astype(int)))
         for client, num_requests in request_distribution.items():
@@ -873,18 +892,6 @@ class NetworkEnvironment:
 
             self.client_regions[client] = region.region.value
 
-    def update_client_latencies(self):
-        self.graph.remove_edges_from([(client, dc) for client in self.clients for dc in self.data_centers])
-
-        for client, region in self.client_regions.items():
-            for dc in self.active_replicas:
-                if region in dc:
-                    latency = random.randint(10, 100)
-                else:
-                    latency = random.randint(100, 750)
-
-                self.graph.add_edge(client, dc, latency=latency)
-
     def fluctuate_latencies(self):
         for key in self.internal_latencies:
             fluctuation = random.uniform(-0.01, 0.01) * self.internal_latencies[key]
@@ -895,18 +902,15 @@ class NetworkEnvironment:
         self._passive_penalty_state = 0
         self.active_penalty_tracker = []
         self.passive_penalty_tracker = []
-        self.simulate_client_movements()
-        self._distribute_requests()
 
         if action is not None:
             self.do_action(action)
 
-        total_latency = 0
-        for client, num_requests in self.current_request_distribution.items():
-            for active_replica in self.active_replicas:
-                latency = self.get_latency(client, active_replica)
-                total_latency += latency * num_requests
+        self.simulate_client_movements()
+        self._distribute_requests()
+
         self._aggregate_latency()
+        #self._scale_latencies()
 
         reward = self._get_active_and_passive_reward()
 
@@ -919,13 +923,14 @@ class NetworkEnvironment:
             self.global_step = 0
 
         self._add_mask_to_graph()
-
         self.global_step += 1
 
         if self.display_all_latencies:
             self._add_all_dc_latencies_to_graph()
 
-        return self.graph, reward, done
+        state = copy.deepcopy(self.graph)
+
+        return state, reward, done
 
     def _get_active_and_passive_reward(self):
         active_reward = self.penalty_weights.LatencyPenalty * (-self.current_latency) - self._active_penalty_state
@@ -934,11 +939,9 @@ class NetworkEnvironment:
         return active_reward, passive_reward
 
 
-
     def reset(self):
         self.time_of_day = 0
-        self.update_client_latencies()
-        self.update_client_latencies()
+        self.simulate_client_movements()
         return self.get_external_state()
 
     def get_external_state(self):
@@ -1189,9 +1192,11 @@ class NetworkEnvironment:
         # Plot data centers
         for dc, pos in self.positions.items():
             label = None
+            size = 150  # Default size for non-client nodes
             if 'c_' in dc[:2]:
                 color = 'yellow'
                 label = 'Client'
+                size = max(5, self.graph.nodes[dc]["requests"] / 8) # Adjust size based on the request number
             elif dc in self.active_replicas:
                 color = 'green'
                 label = 'Active DC'
@@ -1203,13 +1208,11 @@ class NetworkEnvironment:
                 label = 'Inactive DC'
 
             if label not in legend_labels:
-                ax.scatter(pos[0], pos[1], color=color, s=150, label=label,
+                ax.scatter(pos[0], pos[1], color=color, s=size, label=label,
                            transform=ccrs.PlateCarree())  # Increased size
                 legend_labels.add(label)
             else:
-                ax.scatter(pos[0], pos[1], color=color, s=150, transform=ccrs.PlateCarree())  # Increased size
-
-            #ax.text(pos[0], pos[1], dc, fontsize=12, ha='right', transform=ccrs.PlateCarree())  # Larger font size
+                ax.scatter(pos[0], pos[1], color=color, s=size, transform=ccrs.PlateCarree())  # Increased size
 
         # Plot edges
         for u, v, data in self.graph.edges(data=True):
@@ -1235,17 +1238,20 @@ def main():
     # Example usage
     num_centers = 15
     clusters = [5, 5, 5]  # Europe, Asia, USA
-    num_clients = 10
+    num_clients = 30
 
-    env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients, k=1,
+    env = NetworkEnvironment(num_centers=num_centers, clusters=clusters, num_clients=num_clients, k=3,
                              display_all_latencies=True)
+
+    create_interactive_visualization(env)
+    """
     intial_dcs = list(env.active_replicas)
     print(f"Initial active data centers: {intial_dcs}")
     initial_passive_dcs = list(env.passive_replicas)
     print(f"Initial passive data centers: {initial_passive_dcs}")
 
     # Simulate for 24 hours
-    for i in range(24):
+    for i in range(100):
         print(f"Time of day: {i}")
         print(env.client_regions)
         print(env.active_replicas)
@@ -1273,7 +1279,7 @@ def main():
             env.step()
 
         env.visualize_2d_world()
-
+    """
 
 if __name__ == "__main__":
     main()

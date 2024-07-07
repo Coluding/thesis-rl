@@ -1,3 +1,4 @@
+import copy
 import os
 
 import gym
@@ -9,18 +10,24 @@ from typing import Optional
 import logging
 from tqdm import tqdm
 
-from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN, QNetworkSwapGNN
-from src.algorithm.agents import SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth, PPOAgentActionTypeBoth, AbstractAgent, DQGNAgent, DQNConfig
-from src.env.env import RSMEnvConfig, RSMEnv, TorchGraphObservationWrapper, TorchGraphNetworkxWrapper, NetworkEnvGym, CustomNetworkConfig, StackStatesTemporal
+from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN, \
+    QNetworkSwapGNN
+from src.model.temporal_gnn import QNetworkSemiTemporal
+from src.algorithm.agents import SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth, \
+    PPOAgentActionTypeBoth, AbstractAgent, DQGNAgent, DQNConfig
+from src.env.env import RSMEnvConfig, RSMEnv, TorchGraphObservationWrapper, TorchGraphNetworkxWrapper, NetworkEnvGym, \
+    CustomNetworkConfig, StackStatesTemporal
 from src.env.network_simulation import *
+
 
 class TrainingAlgorithms(Enum):
     PPO = 1
     DDQN = 2
 
+
 logging.basicConfig(
     filename='training.log',  # Specify the file to log to
-    filemode='a',        # Mode 'a' for append, 'w' for overwrite
+    filemode='a',  # Mode 'a' for append, 'w' for overwrite
     level=logging.DEBUG,  # Set the minimum logging level
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Define the log message format
 )
@@ -133,9 +140,12 @@ class RepStateMachineTrainerRL:
                         loss = self.agent.get_average_loss()
                         if self.summary_writer is not None:
                             self.summary_writer.add_scalar("active actor loss", loss["actor_active"], self.global_step)
-                            self.summary_writer.add_scalar("passive actor loss", loss["actor_passive"], self.global_step)
-                            self.summary_writer.add_scalar("active critic loss", loss["critic_active"], self.global_step)
-                            self.summary_writer.add_scalar("passive critic loss", loss["critic_passive"], self.global_step)
+                            self.summary_writer.add_scalar("passive actor loss", loss["actor_passive"],
+                                                           self.global_step)
+                            self.summary_writer.add_scalar("active critic loss", loss["critic_active"],
+                                                           self.global_step)
+                            self.summary_writer.add_scalar("passive critic loss", loss["critic_passive"],
+                                                           self.global_step)
                         losses.append(loss)
                         if total_active_reward > best_reward:
                             best_reward = total_active_reward
@@ -144,11 +154,12 @@ class RepStateMachineTrainerRL:
 
                         #log the losses
                         logging.info(f"Step {self.global_step}: Losses: Active Actor: {loss['actor_active']:.4f},"
-                                    f" Passive Actor: {loss['actor_passive']:.4f}, Active Critic: {loss['critic_active']:.4f},"
-                                    f" Passive Critic: {loss['critic_passive']:.4f}")
+                                     f" Passive Actor: {loss['actor_passive']:.4f}, Active Critic: {loss['critic_active']:.4f},"
+                                     f" Passive Critic: {loss['critic_passive']:.4f}")
 
-                        logging.info(f"Step {self.global_step}: Rewards: Active: {total_active_reward / self.training_params.train_steps:.4f},"
-                                    f" Passive: {total_passive_reward / self.training_params.train_steps:.4f}")
+                        logging.info(
+                            f"Step {self.global_step}: Rewards: Active: {total_active_reward / self.training_params.train_steps:.4f},"
+                            f" Passive: {total_passive_reward / self.training_params.train_steps:.4f}")
                         self.agent.clear_memory()
 
                 self.global_step += 1
@@ -160,8 +171,10 @@ class RepStateMachineTrainerRL:
                 step_active_rewards.append(reward[0])
                 step_passive_rewards.append(reward[1])
 
-                self.summary_writer.add_scalar("Active Reward/Step", reward[0], self.global_step) if self.summary_writer is not None else None
-                self.summary_writer.add_scalar("Passive Reward/Step", reward[1], self.global_step) if self.summary_writer is not None else None
+                self.summary_writer.add_scalar("Active Reward/Step", reward[0],
+                                               self.global_step) if self.summary_writer is not None else None
+                self.summary_writer.add_scalar("Passive Reward/Step", reward[1],
+                                               self.global_step) if self.summary_writer is not None else None
 
             # TODO: maybe include early stop of env period if penalty is too high
 
@@ -169,18 +182,27 @@ class RepStateMachineTrainerRL:
             period_active_rewards.append(total_active_reward)
             period_passive_rewards.append(total_passive_reward)
             logging.info(f"Period finished after {period_steps} steps")
-            self.summary_writer.add_scalar("Active Total Reward/Period", total_active_reward, self.global_step) if self.summary_writer is not None else None
-            self.summary_writer.add_scalar("Passive Total Reward/Period", total_passive_reward, self.global_step) if self.summary_writer is not None else None
+            self.summary_writer.add_scalar("Active Total Reward/Period", total_active_reward,
+                                           self.global_step) if self.summary_writer is not None else None
+            self.summary_writer.add_scalar("Passive Total Reward/Period", total_passive_reward,
+                                           self.global_step) if self.summary_writer is not None else None
             # log rolling average of rewards
             active_roll_avg = sum(step_active_rewards[-1000:]) / 1000
             passive_roll_avg = sum(step_passive_rewards[-1000:]) / 1000
             logging.info(f"Step {self.global_step}: Active Rolling Average Reward: {active_roll_avg:.4f}")
             logging.info(f"Step {self.global_step}: Passive Rolling Average Reward: {passive_roll_avg:.4f}")
-            self.summary_writer.add_scalar("Active Rolling Average Reward", active_roll_avg, self.global_step) if self.summary_writer is not None else None
-            self.summary_writer.add_scalar("Passive Rolling Average Reward", passive_roll_avg, self.global_step) if self.summary_writer is not None else None
+            self.summary_writer.add_scalar("Active Rolling Average Reward", active_roll_avg,
+                                           self.global_step) if self.summary_writer is not None else None
+            self.summary_writer.add_scalar("Passive Rolling Average Reward", passive_roll_avg,
+                                           self.global_step) if self.summary_writer is not None else None
             logging.info(f"Step {self.global_step}: Active Reward: {total_active_reward:.4f}")
             logging.info(f"Step {self.global_step}: Passive Reward: {total_passive_reward:.4f}")
 
+    def _extract_last_or_do_nothing(self, data):
+        if isinstance(data, list):
+            data = data[-1]
+
+        return data
 
     def train_ddqn(self):
         logging.info("Training started")
@@ -199,8 +221,10 @@ class RepStateMachineTrainerRL:
                 period_steps = 0
                 num_locs = len(self.env.base_env.dc_to_int)
                 action = self.agent.choose_action(state, num_locs=num_locs)
-                remove_action = int(np.random.choice(torch.where(state.passive_mask[:num_locs] == -np.inf)[0].cpu()))
-                add_action = int(np.random.choice(torch.where(state.passive_mask[:num_locs] != -np.inf)[0].cpu()))
+                remove_action = int(np.random.choice(torch.where(
+                    self._extract_last_or_do_nothing(state).passive_mask[:num_locs] == -np.inf)[0].cpu()))
+                add_action = int(np.random.choice(torch.where(
+                    self._extract_last_or_do_nothing(state).passive_mask[:num_locs] != -np.inf)[0].cpu()))
                 passive_random_action = (remove_action, add_action)
                 action_for_env = (action, passive_random_action)
                 next_state, reward, done, _, _ = self.env.step(action_for_env)
@@ -224,12 +248,10 @@ class RepStateMachineTrainerRL:
                             self.save_models()
                             logging.info(f"Step {self.global_step}: New best reward: {best_reward:.4f}")
 
-
                         logging.info(
                             f"Step {self.global_step}: Rewards: Active: "
                             f"{total_active_reward / self.training_params.train_steps:.4f}"
                         )
-
 
                 self.global_step += 1
                 period_steps += 1
@@ -274,13 +296,38 @@ class RepStateMachineTrainerRL:
     def load_model(self):
         pass
 
+
+def initialize_weights_with_seed(module, seed):
+    """
+    Initialize weights of the given module using a different seed for each layer.
+
+    Parameters:
+    module (torch.nn.Module): The module whose weights need to be initialized.
+    seed (int): The initial seed value for random number generation.
+    """
+    current_seed = seed
+
+    def _initialize(m):
+        nonlocal current_seed
+        torch.manual_seed(current_seed)
+
+        if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Linear):
+            torch.nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                torch.nninit.constant_(m.bias, 0)
+
+        current_seed += 1
+
+    module.apply(_initialize)
+
+
 def main():
     device = "cpu"
     clusters = [5, 5, 5]
 
     penalty_weights = PenaltyWeights(
-        LatencyPenalty = 1,
-        ReconfigurationPenalty = 0.001,
+        LatencyPenalty=1,
+        ReconfigurationPenalty=0.001,
         PassiveCost=0.001,
         ActiveCost=0.001,
         WrongActivePenalty=0.001,
@@ -293,6 +340,7 @@ def main():
         NewEdgesDiscoveredReward=1,
     )
     num_active = 3
+    NUM_STATES = 8
     assert num_active <= clusters[0]
     assert num_active <= clusters[1]
     assert num_active <= clusters[2]
@@ -314,35 +362,35 @@ def main():
                                      )
 
     swap_passive = TransformerSwapGNN(n_layers=4,
-                                     feature_size=2,
-                                     n_heads=3,
-                                     embedding_size=64,
-                                     dropout_rate=0.2,
-                                     top_k_ratio=0.5,
-                                     dense_neurons=256,
-                                     device=device,
-                                     for_active=False
-                           )
+                                      feature_size=2,
+                                      n_heads=3,
+                                      embedding_size=64,
+                                      dropout_rate=0.2,
+                                      top_k_ratio=0.5,
+                                      dense_neurons=256,
+                                      device=device,
+                                      for_active=False
+                                      )
 
     critic_active = TransformerGNN(n_layers=4,
-                           feature_size=2,
-                           n_heads=3,
-                           embedding_size=64,
-                           dropout_rate=0.2,
-                           top_k_ratio=0.5,
-                           dense_neurons=256,
+                                   feature_size=2,
+                                   n_heads=3,
+                                   embedding_size=64,
+                                   dropout_rate=0.2,
+                                   top_k_ratio=0.5,
+                                   dense_neurons=256,
                                    device=device
-                           )
+                                   )
 
     critic_passive = TransformerGNN(n_layers=4,
-                           feature_size=2,
-                           n_heads=3,
-                           embedding_size=64,
-                           dropout_rate=0.2,
-                           top_k_ratio=0.5,
-                           dense_neurons=256,
-                            device=device
-                           )
+                                    feature_size=2,
+                                    n_heads=3,
+                                    embedding_size=64,
+                                    dropout_rate=0.2,
+                                    top_k_ratio=0.5,
+                                    dense_neurons=256,
+                                    device=device
+                                    )
 
     ppo_config = SwapPPOAgentConfigActionTypeBoth(swap_active, critic_active, swap_passive, critic_passive,
                                                   batch_size=32, n_epochs=2,
@@ -367,6 +415,7 @@ def main():
 def dqn():
     device = "cpu"
     clusters = [5, 5, 5]
+    NUM_STATES = 5
 
     penalty_weights = PenaltyWeights(
         LatencyPenalty=1,
@@ -386,12 +435,12 @@ def dqn():
     assert num_active <= clusters[0]
     assert num_active <= clusters[1]
     assert num_active <= clusters[2]
-    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="human",
+    config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=50, render_mode="human",
                                  render_type="2d", device=device, penalty_weights=penalty_weights, num_active=3,
                                  display_all_latencies_from_start=True
                                  )
 
-    q_eval = QNetworkSwapGNN(device=device,
+    q_eval = QNetworkSemiTemporal(device=device,
                              feature_size=3,
                              embedding_size=64,
                              n_heads=3,
@@ -406,46 +455,23 @@ def dqn():
                              reduce_action_space=False
                              )
 
-    q_target_1 = QNetworkSwapGNN(device=device,
-                                 feature_size=3,
-                                 embedding_size=64,
-                                 n_heads=3,
-                                 dropout_rate=0.2,
-                                 n_layers=3,
-                                 dense_neurons=256,
-                                 edge_dim=1,
-                                 num_locations=sum(clusters),
-                                 for_active=True,
-                                 lr=0.0001,
-                                 optimizer=torch.optim.AdamW,
-                                 reduce_action_space=False
-                                 )
+    q_target_1 = copy.deepcopy(q_eval)
+    q_target_2 = copy.deepcopy(q_eval)
 
-    q_target_2 = QNetworkSwapGNN(device=device,
-                                 feature_size=3,
-                                 embedding_size=64,
-                                 n_heads=3,
-                                 dropout_rate=0.2,
-                                 n_layers=3,
-                                 dense_neurons=256,
-                                 edge_dim=1,
-                                 num_locations=sum(clusters),
-                                 for_active=True,
-                                 lr=0.0001,
-                                 optimizer=torch.optim.AdamW,
-                                 reduce_action_space=False
-                                 )
-
-    ddqn_config = DQNConfig(q_eval, q_target_1, q_target_2, batch_size=128, replace_target=1000)
+    ddqn_config = DQNConfig(q_eval, q_target_1, q_target_2, batch_size=64, replace_target=20)
 
     agent = DQGNAgent(ddqn_config)
 
     env = NetworkEnvGym(config)
     env = TorchGraphNetworkxWrapper(env, one_hot=False)
+    env_extended = StackStatesTemporal(env, NUM_STATES)
 
-    training_args = TrainingParams(train_steps=10, num_train_runs=1000000)
+    training_args = TrainingParams(train_steps=25, num_train_runs=1000000)
 
-    trainer_config = RepStateMachineTrainerConfig(agent=agent, env=env, training_params=training_args, day_periods=1000,
+    trainer_config = RepStateMachineTrainerConfig(agent=agent,
+                                                  env=env_extended,
+                                                  training_params=training_args,
+                                                  day_periods=1000,
                                                   training_algorithm=TrainingAlgorithms.DDQN)
 
     trainer = RepStateMachineTrainerRL(trainer_config)
@@ -454,4 +480,4 @@ def dqn():
 
 
 if __name__ == '__main__':
-    dqn()
+    main()

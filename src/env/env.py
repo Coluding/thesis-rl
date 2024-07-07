@@ -513,15 +513,9 @@ class StackStatesTemporal(gym.ObservationWrapper):
         super().__init__(env)
         self.num_states = num_states
 
-        # Define the node and edge spaces for a single graph
-        self.node_space = spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
-        self.edge_space = spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
-
-        # Adjust the observation space to accommodate stacking
-        self.observation_space = spaces.Dict({
-            'node_features': spaces.Box(low=0, high=np.inf, shape=(self.num_states, 4), dtype=np.float32),
-            'edge_features': spaces.Box(low=0, high=np.inf, shape=(self.num_states, 1), dtype=np.float32)
-        })
+        self.device = env.env.config.device
+        self.inner_env = env.env
+        self.base_env = env.env.env
 
         self.stack = deque(maxlen=num_states)
         self._initialize_stack()
@@ -532,27 +526,22 @@ class StackStatesTemporal(gym.ObservationWrapper):
             for _ in range(self.num_states):
                 self.stack.append(reset_state)
 
-    def observation(self, observation: Data) -> Data:
+    def observation(self, observation: Data) -> List[Data]:
         self.stack.append(observation)
         graphs = list(self.stack)
 
-        node_features = [[graph.type.cpu().numpy(), graph.requests.cpu().numpy(), graph.update_step.cpu().numpy()]
-                         for graph in graphs]
-        edge_indices = ([graph.edge_index for graph in graphs])
-        latencies = ([graph.latency.cpu().numpy() for graph in graphs])
-        targets = [np.array((i)) for i in range(len(graphs))]
-        active_mask = [graph.active_mask.cpu().numpy() for graph in graphs]
-        passive_mask = [graph.passive_mask.cpu().numpy() for graph in graphs]
+        return graphs
 
-        """
-        temporal_graph = DynamicGraphTemporalSignal(
-            features=node_features,
-            edge_indices=edge_indices,
-            edge_weights=latencies,
-            targets=targets,
-            active_mask=active_mask,
-            passive_mask=passive_mask
-        )
 
-        return temporal_graph
-        """
+"""
+node_features = [[graph.type.cpu().numpy(), graph.requests.cpu().numpy(), graph.update_step.cpu().numpy()]
+                 for graph in graphs]
+edge_indices = ([graph.edge_index for graph in graphs])
+latencies = ([graph.latency.cpu().numpy() for graph in graphs])
+targets = [np.array((i)) for i in range(len(graphs))]
+active_mask = [graph.active_mask.cpu().numpy() for graph in graphs]
+passive_mask = [graph.passive_mask.cpu().numpy() for graph in graphs]
+"""
+
+
+

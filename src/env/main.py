@@ -17,7 +17,7 @@ from src.env.env import (IntervalResult,
 from src.algorithm.agents import (SwapPPOAgentConfigActionTypeSingle, SwapPPOAgentConfigActionTypeBoth,
                                   PPOAgentActionTypeBoth)
 from src.model.gnn import CriticGCNN, ActorGCNN, SwapGNN, CriticSwapGNN, TransformerSwapGNN, QNetworkSwapGNN
-from src.model.temporal_gnn import SemiTemporalSwapGNN
+from src.model.temporal_gnn import SemiTemporalEmbeddingConstructor, QNetworkSemiTemporal
 
 def use_java():
     critic = CriticGCNN(4, 48, 24, 128, num_nodes=15)
@@ -67,20 +67,17 @@ def use_custom():
     config = CustomNetworkConfig(num_centers=3, clusters=clusters, num_clients=20, render_mode="human",
                                  render_type="2d", device=device, penalty_weights=penalty_weights,num_active=1)
 
-    temp_gnn = SemiTemporalSwapGNN(4, 4, 64, 128, num_nodes=15,
-                          for_active=True, num_locations=sum(clusters), device=device)
-
-    swap_active = SwapGNN(4, 4, 64, 128, num_nodes=15,
-                          for_active=True, num_locations=sum(clusters), device=device)
-    swap_active = QNetworkSwapGNN(n_layers=4,
-                                  feature_size=3,
+    temp_gnn = QNetworkSemiTemporal(n_layers=4,
+                                  feature_size=2,
                                   n_heads=3,
                                   embedding_size=64,
                                   dropout_rate=0.2,
-                                  top_k_ratio=0.5,
                                   dense_neurons=256,
                                   device="cpu"
-                           )
+                                   )
+    swap_active = SwapGNN(4, 4, 64, 128, num_nodes=15,
+                          for_active=True, num_locations=sum(clusters), device=device)
+
     swap_passive = SwapGNN(4, 4, 64, 128, num_nodes=15,
                            for_active=False, num_locations=sum(clusters), device=device)
 
@@ -102,8 +99,8 @@ def use_custom():
     action = (env.env.env.no_op_active(), env.env.env.no_op_passive())
     state, reward, done, _, _ = env.step(action)
 
-    #temp_state = env_extended.step(action)
-    #temp_gnn(temp_state[0])
+    temp_state = env_extended.step(action)
+    temp_gnn(temp_state[0])
     #for i in range(10):
      #   state, reward, done, _, _ = env_extended.step(action)
     done = False

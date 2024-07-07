@@ -14,7 +14,8 @@ import warnings
 from torch_geometric.data import Data, Batch
 from enum import Enum
 
-from src.model.gnn import SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN
+from src.model.gnn import SwapGNN, CriticSwapGNN, TransformerSwapGNN, TransformerGNN, QNetworkSwapGNN
+from src.model.temporal_gnn import QNetworkSemiTemporal
 from src.algorithm.memory import OnPolicyMemory, ExperienceReplayBuffer
 
 logging.basicConfig(
@@ -277,10 +278,10 @@ class PPOAgentActionTypeBoth(AbstractAgent):
                 clipped_ratio_passive = torch.clamp(ratio_passive, 1 - self.clip_eps, 1 + self.clip_eps)
 
                 # Compute the surrogate loss objectives
-                objective_active = torch.min(ratio_active * advantages_active,
-                                             clipped_ratio_active * advantages_active)
-                objective_passive = torch.min(ratio_passive * advantages_passive,
-                                              clipped_ratio_passive * advantages_passive)
+                objective_active = torch.min(ratio_active * -advantages_active,
+                                             clipped_ratio_active * -advantages_active)
+                objective_passive = torch.min(ratio_passive * -advantages_passive,
+                                              clipped_ratio_passive * -advantages_passive)
 
                 # Add entropy regularization to the objectives to encourage exploration
                 objective_active_regularized = objective_active + self.entropy_reg * self._compute_entropy(log_prob_new_active)
@@ -294,6 +295,8 @@ class PPOAgentActionTypeBoth(AbstractAgent):
                 critic_active_loss = torch.mean((returns_active - per_graph_value_output_active.squeeze()) ** 2)
                 critic_passive_loss = torch.mean((returns_passive - per_graph_value_output_passive.squeeze()) ** 2)
 
+                full_loss = actor_active_loss + critic_active_loss + actor_passive_loss + critic_passive_loss
+
                 # Zero the gradients for all the optimizers
                 self.swap_actor_active.optimizer.zero_grad()
                 self.swap_actor_passive.optimizer.zero_grad()
@@ -301,10 +304,7 @@ class PPOAgentActionTypeBoth(AbstractAgent):
                 self.swap_critic_passive.optimizer.zero_grad()
 
                 # Backpropagate the total loss (maybe do retain_graph=True) for every single loss
-                actor_active_loss.backward(retain_graph=True)
-                actor_passive_loss.backward(retain_graph=True)
-                critic_active_loss.backward(retain_graph=True)
-                critic_passive_loss.backward()
+                full_loss.backward()
 
                 # Update the network parameters
                 self.swap_actor_active.optimizer.step()
@@ -412,13 +412,21 @@ class DQGNAgent(AbstractAgent):
         self.loss = nn.MSELoss(reduction="mean")
         self.two_targets = config.q_target2 is not None
 
-    def choose_action(self, state, num_locs=None):
+    def choose_action(self, state, num_locs=15):
         if np.random.random() > self.epsilon:
             q_values = self.q_eval(state).q_values
             action = tuple([ac.item() for ac in torch.argmax(q_values[0][:num_locs,...], dim=0).cpu()])
         else:
-            remove_action = int(np.random.choice(torch.where(state.active_mask[:num_locs] == -np.inf)[0].cpu()))
-            add_action = int(np.random.choice(torch.where(state.passive_mask[:num_locs] != -np.inf)[0].cpu()))
+            if isinstance(state, list):
+                state = state[-1]
+            action_mask = state.active_mask
+            add_mask = action_mask.clone()
+            remove_mask = add_mask.clone()
+            remove_mask[:num_locs][add_mask[:num_locs] == 0] = -np.inf
+            remove_mask[:num_locs][add_mask[:num_locs] == -np.inf] = 0
+            remove_action = int(np.random.choice(torch.where(remove_mask[:num_locs] != -np.inf)[0].cpu()))
+            add_mask[remove_action] = 0
+            add_action = int(np.random.choice(torch.where(add_mask[:num_locs] != -np.inf)[0].cpu()))
             action = (remove_action, add_action)
         return action
 
@@ -445,19 +453,38 @@ class DQGNAgent(AbstractAgent):
                          dones: torch.BoolTensor,
                          grad: bool = True) -> torch.Tensor:
 
-        rewards = torch.tensor(rewards).to(self.q_eval.device)
+        rewards = torch.tensor(rewards).float().to(self.q_eval.device)
         actions = torch.tensor(action).to(self.q_eval.device)
         if grad:
-            q_pred_vals = self.q_eval.forward(states, states.batch)
-            q_pred_vals = torch.stack(q_pred_vals.q_values)
+            if isinstance(self.q_eval, QNetworkSemiTemporal):
+                q_pred_vals = self.q_eval.forward(states, action).q_values
+            elif isinstance(self.q_eval, QNetworkSwapGNN):
+                states = Batch.from_data_list(states)
+                states_ = Batch.from_data_list(states_)
+                q_pred_vals = self.q_eval.forward(states, states.batch, action)
+                q_pred_vals = torch.stack(q_pred_vals.q_values)
+            else:
+                raise NotImplementedError("Current DQN is not supported")
             q_pred_remove = q_pred_vals[..., 0][torch.arange(len(actions[..., 0])), actions[..., 0]]
+            # TODO: Problem here: We are selecting inf values and then compute the loss, this will result in nans
+            # TODO: Solve the problem of adding inf --> Proper action masking necessary
             q_pred_add = q_pred_vals[..., 1][torch.arange(len(actions[..., 1])), actions[..., 1]]
-            q_next_vals1 = self.q_target1.forward(states_, states_.batch)
-            q_next_vals2 = self.q_target2.forward(states_, states_.batch)
-            q_next_vals1_remove_max = torch.max(torch.stack(q_next_vals1.q_values)[..., 0], dim=1)[0]
-            q_next_vals2_remove_max = torch.max(torch.stack(q_next_vals2.q_values)[..., 0], dim=1)[0]
-            q_next_vals1_add_max = torch.max(torch.stack(q_next_vals1.q_values)[..., 1], dim=1)[0]
-            q_next_vals2_add_max = torch.max(torch.stack(q_next_vals2.q_values)[..., 1], dim=1)[0]
+            if isinstance(self.q_eval, QNetworkSemiTemporal):
+                q_next_vals1 = self.q_target1.forward(states_)
+                q_next_vals2 = self.q_target2.forward(states_)
+                q_next_vals1_remove_max = torch.max(q_next_vals1.q_values[..., 0])
+                q_next_vals2_remove_max = torch.max(q_next_vals2.q_values[..., 0])
+                q_next_vals1_add_max = torch.max(q_next_vals1.q_values[..., 1])
+                q_next_vals2_add_max = torch.max(q_next_vals2.q_values[..., 1])
+
+            elif isinstance(self.q_eval, QNetworkSwapGNN):
+                q_next_vals1 = self.q_target1.forward(states_, states_.batch)
+                q_next_vals2 = self.q_target2.forward(states_, states_.batch)
+                q_next_vals1_remove_max = torch.max(torch.stack(q_next_vals1.q_values)[..., 0], dim=1)[0]
+                q_next_vals2_remove_max = torch.max(torch.stack(q_next_vals2.q_values)[..., 0], dim=1)[0]
+                q_next_vals1_add_max = torch.max(torch.stack(q_next_vals1.q_values)[..., 1], dim=1)[0]
+                q_next_vals2_add_max = torch.max(torch.stack(q_next_vals2.q_values)[..., 1], dim=1)[0]
+
             q_value_next_remove = torch.min(q_next_vals1_remove_max, q_next_vals2_remove_max)
             q_value_next_add = torch.min(q_next_vals1_add_max, q_next_vals2_add_max)
 

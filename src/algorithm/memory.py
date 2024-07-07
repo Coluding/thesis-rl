@@ -105,12 +105,22 @@ class ExperienceReplayBuffer:
         next_state = copy.deepcopy(next_state)
 
         if self.should_normalize_latencies:
-            self.latency_avg_tracker += torch.mean(torch.cat((state.latency, next_state.latency))).item()
-            self.latency_std_tracker += torch.std(torch.cat((state.latency, next_state.latency))).item()
-            mean_latency = self.latency_avg_tracker / (self.current_step + 1)
-            std_latency = self.latency_std_tracker / (self.current_step + 1)
-            state.latency = self.normalize_latencies(state.latency, mean_latency, std_latency)
-            next_state.latency = self.normalize_latencies(next_state.latency, mean_latency, std_latency)
+            if isinstance(state, list):
+                self.latency_avg_tracker += torch.mean(torch.cat((state[-1].latency, next_state[-1].latency))).item()
+                self.latency_std_tracker += torch.std(torch.cat((state[-1].latency, next_state[-1].latency))).item()
+                mean_latency = self.latency_avg_tracker / (self.current_step + 1)
+                std_latency = self.latency_std_tracker / (self.current_step + 1)
+
+                for s, ns in zip(state, next_state):
+                        s.latency = self.normalize_latencies(s.latency, mean_latency, std_latency)
+                        ns.latency = self.normalize_latencies(ns.latency, mean_latency, std_latency)
+            else:
+                self.latency_avg_tracker += torch.mean(torch.cat((state.latency, next_state.latency))).item()
+                self.latency_std_tracker += torch.std(torch.cat((state.latency, next_state.latency))).item()
+                mean_latency = self.latency_avg_tracker / (self.current_step + 1)
+                std_latency = self.latency_std_tracker / (self.current_step + 1)
+                state.latency = self.normalize_latencies(state.latency, mean_latency, std_latency)
+                next_state.latency = self.normalize_latencies(next_state.latency, mean_latency, std_latency)
 
         if self.current_step > self.max_size:
             insert_ind = self.current_step % self.max_size
@@ -130,8 +140,8 @@ class ExperienceReplayBuffer:
 
     def sample(self):
         indices = np.random.choice(np.arange(self.current_step), self.batch_size, replace=False)
-        states = Batch.from_data_list([self.memory["states"][i] for i in indices])
-        states_ = Batch.from_data_list([self.memory["states_"][i] for i in indices])
+        states = [self.memory["states"][i] for i in indices]
+        states_ = [self.memory["states_"][i] for i in indices]
         rewards = [self.memory["rewards"][i] for i in indices]
         actions = [self.memory["actions"][i] for i in indices]
         dones = [self.memory["dones"][i] for i in indices]
