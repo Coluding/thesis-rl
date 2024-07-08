@@ -1,0 +1,14 @@
+/*.pyc
+.idea/
+*.iml
+*.pyc
+*.mp4
+*.meta.json
+/venv/
+*.pt
+graph
+*.pth
+*.log
+logs/
+*.pkl
+*.html
