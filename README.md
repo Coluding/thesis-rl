@@ -1,11 +1,23 @@
-## Structure
+# Thesis Repository
+## Title:
+Optimizing Allocation Location Problems: A Hybrid Approach with Graph Neural Networks andDeep Reinforcement Learning
 
+
+## Abstract:
+This thesis explores the optimization of dynamic Location Allocation (LA) problems with a focus on Replicated State Machines (RSM) in large-scale global networks. RSM systems, which ensure fault tolerance through the replication of state machines across multiple data centers, face significant latency challenges due to global client distribution and the need for dynamic reconfiguration of active data centers. Traditional heuristic approaches are limited in their scalability and ability to adapt to rapidly changing environments.\\
+To address these challenges, this research proposes a hybrid optimization framework that leverages Graph Neural Networks (GNNs) and Deep Reinforcement Learning (DRL). GNNs are employed to capture the complex graph structure of RSM systems, representing data centers and client interactions. DRL is utilized to train the model in an online learning environment, enabling it to dynamically adjust data center configurations to minimize latency and operational costs.\\
+The thesis first provides a comprehensive review of LA problems and their classification, followed by an exploration of classical and modern heuristic solution methods, including the theoretical foundation of DRL and GNNs. A novel application of the Dynamic Stochastic Facility Location Problem (DSFLP) is developed to frame the RSM optimization challenge within an RL context. The proposed solution is evaluated in a simulated environment, demonstrating its effectiveness in reducing latency and improving system performance compared to traditional methods.\\
+This work contributes to the field of operations research by integrating advanced machine learning techniques with classical optimization problems, offering a scalable and adaptive solution for real-world applications in global network management.
+
+
+## Structure
+It contains Python and Java Code. The Java Code is just a mockup to test the connection to the Python code. The goal is to build a DRL algorithm that solves the optimal relocation challenge of the replicated state machine system.  Everything is implemented using OpenAI Gym and PyTorch to build a modular and reusable code base.
 ### Python
 
 The primary purpose of the Python code is to integrate a Java-based simulation into a reinforcement learning (RL) environment. This integration enables the RL agent to interact with and learn from a dynamic environment modeled by the Java simulation. Here's a detailed breakdown of the process:
 
 1. Java Simulation Interface: The Python code interfaces with the Java simulation using JPype, allowing it to execute Java methods directly. This setup is crucial for accessing the real-time simulation data necessary for RL training.
-2. Python Simulation Interface: For more convenience, there is also a Python simulation that runs without Java. It is a simplified version fo the Java simulation and is satisfying for  the scope of this thesis. The output of both simulations, a graph instance, is identical making the interchange between the two possible
+2. Python Simulation Interface: For more convenience, there is also a Python simulation that runs without Java. It is a simplified version of the Java simulation and is satisfying for  the scope of this thesis. The output of both simulations, a graph instance, is identical making the interchange between the two possible
 3. Creation of the RL Environment:
 Within this environment, Python leverages the results from periodic simulation intervals provided by the Java/Python backend. Each interval yields data that Python transforms into the current state of the environment, represented as a graph structure.
 4. Graph Construction:
